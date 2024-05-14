@@ -90,14 +90,14 @@ func TestSweepBatcherBatchCreation(t *testing.T) {
 	store.AssertLoopOutStored()
 
 	// Deliver sweep request to batcher.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Since a batch was created we check that it registered for its primary
 	// sweep's spend.
 	<-lnd.RegisterSpendChannel
 
 	// Insert the same swap twice, this should be a noop.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Once batcher receives sweep request it will eventually spin up a
 	// batch.
@@ -129,7 +129,7 @@ func TestSweepBatcherBatchCreation(t *testing.T) {
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	batcher.sweepReqs <- sweepReq2
+	require.NoError(t, batcher.AddSweep(&sweepReq2))
 
 	// Batcher should not create a second batch as timeout distance is small
 	// enough.
@@ -161,7 +161,7 @@ func TestSweepBatcherBatchCreation(t *testing.T) {
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	batcher.sweepReqs <- sweepReq3
+	require.NoError(t, batcher.AddSweep(&sweepReq3))
 
 	// Batcher should create a second batch as timeout distance is greater
 	// than the threshold
@@ -245,7 +245,7 @@ func TestSweepBatcherSimpleLifecycle(t *testing.T) {
 	store.AssertLoopOutStored()
 
 	// Deliver sweep request to batcher.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Eventually request will be consumed and a new batch will spin up.
 	require.Eventually(t, func() bool {
@@ -431,15 +431,15 @@ func TestSweepBatcherSweepReentry(t *testing.T) {
 	store.AssertLoopOutStored()
 
 	// Feed the sweeps to the batcher.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// After inserting the primary (first) sweep, a spend monitor should be
 	// registered.
 	<-lnd.RegisterSpendChannel
 
-	batcher.sweepReqs <- sweepReq2
+	require.NoError(t, batcher.AddSweep(&sweepReq2))
 
-	batcher.sweepReqs <- sweepReq3
+	require.NoError(t, batcher.AddSweep(&sweepReq3))
 
 	// Batcher should create a batch for the sweeps.
 	require.Eventually(t, func() bool {
@@ -591,7 +591,7 @@ func TestSweepBatcherNonWalletAddr(t *testing.T) {
 	store.AssertLoopOutStored()
 
 	// Deliver sweep request to batcher.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Once batcher receives sweep request it will eventually spin up a
 	// batch.
@@ -604,7 +604,7 @@ func TestSweepBatcherNonWalletAddr(t *testing.T) {
 	<-lnd.RegisterSpendChannel
 
 	// Insert the same swap twice, this should be a noop.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Create a second sweep request that has a timeout distance less than
 	// our configured threshold.
@@ -631,7 +631,7 @@ func TestSweepBatcherNonWalletAddr(t *testing.T) {
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	batcher.sweepReqs <- sweepReq2
+	require.NoError(t, batcher.AddSweep(&sweepReq2))
 
 	// Batcher should create a second batch as first batch is a non wallet
 	// addr batch.
@@ -668,7 +668,7 @@ func TestSweepBatcherNonWalletAddr(t *testing.T) {
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	batcher.sweepReqs <- sweepReq3
+	require.NoError(t, batcher.AddSweep(&sweepReq3))
 
 	// Batcher should create a new batch as timeout distance is greater than
 	// the threshold
@@ -879,7 +879,7 @@ func TestSweepBatcherComposite(t *testing.T) {
 	store.AssertLoopOutStored()
 
 	// Deliver sweep request to batcher.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
 	// Once batcher receives sweep request it will eventually spin up a
 	// batch.
@@ -892,9 +892,9 @@ func TestSweepBatcherComposite(t *testing.T) {
 	<-lnd.RegisterSpendChannel
 
 	// Insert the same swap twice, this should be a noop.
-	batcher.sweepReqs <- sweepReq1
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
 
-	batcher.sweepReqs <- sweepReq2
+	require.NoError(t, batcher.AddSweep(&sweepReq2))
 
 	// Batcher should not create a second batch as timeout distance is small
 	// enough.
@@ -902,7 +902,7 @@ func TestSweepBatcherComposite(t *testing.T) {
 		return len(batcher.batches) == 1
 	}, test.Timeout, eventuallyCheckFrequency)
 
-	batcher.sweepReqs <- sweepReq3
+	require.NoError(t, batcher.AddSweep(&sweepReq3))
 
 	// Batcher should create a second batch as this sweep pays to a non
 	// wallet address.
@@ -914,7 +914,7 @@ func TestSweepBatcherComposite(t *testing.T) {
 	// sweep's spend.
 	<-lnd.RegisterSpendChannel
 
-	batcher.sweepReqs <- sweepReq4
+	require.NoError(t, batcher.AddSweep(&sweepReq4))
 
 	// Batcher should create a third batch as timeout distance is greater
 	// than the threshold.
@@ -926,7 +926,7 @@ func TestSweepBatcherComposite(t *testing.T) {
 	// sweep's spend.
 	<-lnd.RegisterSpendChannel
 
-	batcher.sweepReqs <- sweepReq5
+	require.NoError(t, batcher.AddSweep(&sweepReq5))
 
 	// Batcher should not create a fourth batch as timeout distance is small
 	// enough for it to join the last batch.
@@ -934,7 +934,7 @@ func TestSweepBatcherComposite(t *testing.T) {
 		return len(batcher.batches) == 3
 	}, test.Timeout, eventuallyCheckFrequency)
 
-	batcher.sweepReqs <- sweepReq6
+	require.NoError(t, batcher.AddSweep(&sweepReq6))
 
 	// Batcher should create a fourth batch as this sweep pays to a non
 	// wallet address.
