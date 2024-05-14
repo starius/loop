@@ -12,7 +12,9 @@ import (
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/loop/loopdb"
+	"github.com/lightninglabs/loop/swap"
 	"github.com/lightninglabs/loop/utils"
+	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 )
@@ -88,6 +90,53 @@ type LoopOutFetcher interface {
 	// FetchLoopOutSwap returns the loop out swap with the given hash.
 	FetchLoopOutSwap(ctx context.Context,
 		hash lntypes.Hash) (*loopdb.LoopOut, error)
+}
+
+// SweepInfo stores any data related to sweeping a specific outpoint.
+type SweepInfo struct {
+	// SwapHash is the hash of the swap that the sweep belongs to.
+	SwapHash lntypes.Hash
+
+	// ConfTarget is the confirmation target of the sweep.
+	ConfTarget int32
+
+	// Timeout is the timeout of the swap that the sweep belongs to.
+	Timeout int32
+
+	// InitiationHeight is the height at which the swap was initiated.
+	InitiationHeight int32
+
+	// HTLC is the HTLC that is being swept.
+	HTLC swap.Htlc
+
+	// Preimage is the preimage of the HTLC that is being swept.
+	Preimage lntypes.Preimage
+
+	// SwapInvoicePaymentAddr is the payment address of the swap invoice.
+	SwapInvoicePaymentAddr [32]byte
+
+	// HTLCKeys is the set of keys used to sign the HTLC.
+	HTLCKeys loopdb.HtlcKeys
+
+	// HTLCSuccessEstimator is a function that estimates the weight of the
+	// HTLC success script.
+	HTLCSuccessEstimator func(*input.TxWeightEstimator) error
+
+	// ProtocolVersion is the protocol version of the swap that the sweep
+	// belongs to.
+	ProtocolVersion loopdb.ProtocolVersion
+
+	// IsExternalAddr is true if the sweep spends to a non-wallet address.
+	IsExternalAddr bool
+
+	// DestAddr is the destination address of the sweep.
+	DestAddr btcutil.Address
+}
+
+// SweepFetcher is used to get details of a sweep.
+type SweepFetcher interface {
+	// FetchSweep returns details of the sweep with the given hash.
+	FetchSweep(ctx context.Context, hash lntypes.Hash) (*SweepInfo, error)
 }
 
 // MuSig2SignSweep is a function that can be used to sign a sweep transaction
@@ -187,20 +236,37 @@ type Batcher struct {
 	// batcher and the batches.
 	store BatcherStore
 
-	// swapStore is used to load LoopOut swaps from the database.
-	swapStore LoopOutFetcher
+	// sweepStore is used to load sweeps from the database.
+	sweepStore SweepFetcher
 
 	// wg is a waitgroup that is used to wait for all the goroutines to
 	// exit.
 	wg sync.WaitGroup
 }
 
-// NewBatcher creates a new Batcher instance.
+// NewBatcher creates a new Batcher instance using LoopOutFetcher.
 func NewBatcher(wallet lndclient.WalletKitClient,
 	chainNotifier lndclient.ChainNotifierClient,
 	signerClient lndclient.SignerClient, musig2ServerSigner MuSig2SignSweep,
 	verifySchnorrSig VerifySchnorrSig, chainparams *chaincfg.Params,
 	store BatcherStore, swapStore LoopOutFetcher) *Batcher {
+
+	sweepStore := &loopOutFetcher{
+		swapStore:   swapStore,
+		chainParams: chainparams,
+	}
+
+	return NewGenericBatcher(wallet, chainNotifier, signerClient,
+		musig2ServerSigner, verifySchnorrSig, chainparams, store,
+		sweepStore)
+}
+
+// NewGenericBatcher creates a new Batcher instance using generic SweepFetcher.
+func NewGenericBatcher(wallet lndclient.WalletKitClient,
+	chainNotifier lndclient.ChainNotifierClient,
+	signerClient lndclient.SignerClient, musig2ServerSigner MuSig2SignSweep,
+	verifySchnorrSig VerifySchnorrSig, chainparams *chaincfg.Params,
+	store BatcherStore, sweepStore SweepFetcher) *Batcher {
 
 	return &Batcher{
 		batches:          make(map[int32]*batch),
@@ -214,7 +280,7 @@ func NewBatcher(wallet lndclient.WalletKitClient,
 		VerifySchnorrSig: verifySchnorrSig,
 		chainParams:      chainparams,
 		store:            store,
-		swapStore:        swapStore,
+		sweepStore:       sweepStore,
 	}
 }
 
@@ -663,6 +729,57 @@ func (b *Batcher) convertSweep(dbSweep *dbSweep) (*sweep, error) {
 	}, nil
 }
 
+// loopOutFetcher is LoopOutFetcher wrapper providing SweepFetcher interface.
+type loopOutFetcher struct {
+	// swapStore is used to load LoopOut swaps from the database.
+	swapStore LoopOutFetcher
+
+	// chainParams are the chain parameters of the chain that is used by
+	// batches.
+	chainParams *chaincfg.Params
+}
+
+// FetchSweep returns details of the sweep with the given hash.
+// Implements SweepFetcher interface.
+func (f *loopOutFetcher) FetchSweep(ctx context.Context,
+	swapHash lntypes.Hash) (*SweepInfo, error) {
+
+	swap, err := f.swapStore.FetchLoopOutSwap(ctx, swapHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch loop out for %x: %v",
+			swapHash[:6], err)
+	}
+
+	htlc, err := utils.GetHtlc(
+		swapHash, &swap.Contract.SwapContract, f.chainParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get htlc: %v", err)
+	}
+
+	swapPaymentAddr, err := utils.ObtainSwapPaymentAddr(
+		swap.Contract.SwapInvoice, f.chainParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment addr: %v", err)
+	}
+
+	return &SweepInfo{
+		SwapHash:               swap.Hash,
+		ConfTarget:             swap.Contract.SweepConfTarget,
+		Timeout:                swap.Contract.CltvExpiry,
+		InitiationHeight:       swap.Contract.InitiationHeight,
+		HTLC:                   *htlc,
+		Preimage:               swap.Contract.Preimage,
+		SwapInvoicePaymentAddr: *swapPaymentAddr,
+		HTLCKeys:               swap.Contract.HtlcKeys,
+		HTLCSuccessEstimator:   htlc.AddSuccessToEstimator,
+		ProtocolVersion:        swap.Contract.ProtocolVersion,
+		IsExternalAddr:         swap.Contract.IsExternalAddr,
+		DestAddr:               swap.Contract.DestAddr,
+	}, nil
+}
+
 // fetchSweep fetches the sweep related information from the database.
 func (b *Batcher) fetchSweep(ctx context.Context,
 	sweepReq SweepRequest) (*sweep, error) {
@@ -672,40 +789,26 @@ func (b *Batcher) fetchSweep(ctx context.Context,
 		return nil, fmt.Errorf("failed to parse swapHash: %v", err)
 	}
 
-	swap, err := b.swapStore.FetchLoopOutSwap(ctx, swapHash)
+	s, err := b.sweepStore.FetchSweep(ctx, swapHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch loop out for %x: %v",
+		return nil, fmt.Errorf("failed to fetch sweep data for %x: %v",
 			swapHash[:6], err)
 	}
 
-	htlc, err := utils.GetHtlc(
-		swapHash, &swap.Contract.SwapContract, b.chainParams,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get htlc: %v", err)
-	}
-
-	swapPaymentAddr, err := utils.ObtainSwapPaymentAddr(
-		swap.Contract.SwapInvoice, b.chainParams,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payment addr: %v", err)
-	}
-
 	return &sweep{
-		swapHash:               swap.Hash,
+		swapHash:               s.SwapHash,
 		outpoint:               sweepReq.Outpoint,
 		value:                  sweepReq.Value,
-		confTarget:             swap.Contract.SweepConfTarget,
-		timeout:                swap.Contract.CltvExpiry,
-		initiationHeight:       swap.Contract.InitiationHeight,
-		htlc:                   *htlc,
-		preimage:               swap.Contract.Preimage,
-		swapInvoicePaymentAddr: *swapPaymentAddr,
-		htlcKeys:               swap.Contract.HtlcKeys,
-		htlcSuccessEstimator:   htlc.AddSuccessToEstimator,
-		protocolVersion:        swap.Contract.ProtocolVersion,
-		isExternalAddr:         swap.Contract.IsExternalAddr,
-		destAddr:               swap.Contract.DestAddr,
+		confTarget:             s.ConfTarget,
+		timeout:                s.Timeout,
+		initiationHeight:       s.InitiationHeight,
+		htlc:                   s.HTLC,
+		preimage:               s.Preimage,
+		swapInvoicePaymentAddr: s.SwapInvoicePaymentAddr,
+		htlcKeys:               s.HTLCKeys,
+		htlcSuccessEstimator:   s.HTLCSuccessEstimator,
+		protocolVersion:        s.ProtocolVersion,
+		isExternalAddr:         s.IsExternalAddr,
+		destAddr:               s.DestAddr,
 	}, nil
 }
