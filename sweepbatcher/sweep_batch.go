@@ -494,6 +494,7 @@ func (b *batch) Run(ctx context.Context) error {
 
 		case <-timerChan:
 			if b.state == Open {
+		println("publish begin")
 				err := b.publish(ctx)
 				if err != nil {
 					return err
@@ -730,6 +731,9 @@ func (b *batch) publishBatch(ctx context.Context) (btcutil.Amount, error) {
 func (b *batch) publishBatchCoop(ctx context.Context) (btcutil.Amount,
 	error, bool) {
 
+		println("publishBatchCoop begin")
+	b.log.Debugf("publishBatchCoop: %v", b.id)
+
 	var (
 		batchAmt       = btcutil.Amount(0)
 		sweeps         = make([]sweep, 0, len(b.sweeps))
@@ -839,15 +843,22 @@ func (b *batch) publishBatchCoop(ctx context.Context) (btcutil.Amount,
 		return fee, err, false
 	}
 
+	b.log.Debugf("publishBatchCoop 11")
+
 	prevOutputFetcher := txscript.NewMultiPrevOutFetcher(prevOuts)
+
+	b.log.Debugf("publishBatchCoop 12")
 
 	// Attempt to cooperatively sign the batch tx with the server.
 	err = b.coopSignBatchTx(
 		ctx, packet, sweeps, prevOutputFetcher, prevOuts, psbtBuf,
 	)
+	b.log.Debugf("publishBatchCoop 13")
 	if err != nil {
 		return fee, err, false
 	}
+	b.log.Debugf("publishBatchCoop 14")
+
 
 	b.log.Infof("attempting to publish coop tx=%v with feerate=%v, "+
 		"totalfee=%v, sweeps=%d, destAddr=%s", batchTx.TxHash(),
@@ -867,6 +878,8 @@ func (b *batch) publishBatchCoop(ctx context.Context) (btcutil.Amount,
 	txHash := batchTx.TxHash()
 	b.batchTxid = &txHash
 	b.batchPkScript = batchPkScript
+
+	b.log.Debugf("publishBatchCoop return")
 
 	return fee, nil, true
 }
@@ -888,8 +901,14 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 	sweeps []sweep, prevOutputFetcher *txscript.MultiPrevOutFetcher,
 	prevOuts map[wire.OutPoint]*wire.TxOut, psbtBuf bytes.Buffer) error {
 
+		println("coopSignBatchTx begin")
+
+	b.log.Debugf("coopSignBatchTx 1")
+
 	for i, sweep := range sweeps {
 		sweep := sweep
+
+	b.log.Debugf("coopSignBatchTx 2")
 
 		sigHashes := txscript.NewTxSigHashes(
 			packet.UnsignedTx, prevOutputFetcher,
@@ -907,6 +926,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 			signers       [][]byte
 			muSig2Version input.MuSig2Version
 		)
+	b.log.Debugf("coopSignBatchTx 3")
 
 		// Depending on the MuSig2 version we either pass 32 byte
 		// Schnorr public keys or normal 33 byte public keys.
@@ -929,6 +949,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 			return fmt.Errorf("invalid htlc script version")
 		}
 
+	b.log.Debugf("coopSignBatchTx 4 %#v", b.signerClient)
 		// Now we're creating a local MuSig2 session using the receiver
 		// key's key locator and the htlc's root hash.
 		musig2SessionInfo, err := b.signerClient.MuSig2CreateSession(
@@ -938,10 +959,12 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 				htlcScript.RootHash[:], false,
 			),
 		)
+	b.log.Debugf("coopSignBatchTx 4a")
 		if err != nil {
 			return err
 		}
 
+	b.log.Debugf("coopSignBatchTx 5")
 		// With the session active, we can now send the server our
 		// public nonce and the sig hash, so that it can create it's own
 		// MuSig2 session and return the server side nonce and partial
@@ -955,6 +978,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 		if err != nil {
 			return err
 		}
+	b.log.Debugf("coopSignBatchTx 6")
 
 		var serverPublicNonce [musig2.PubNonceSize]byte
 		copy(serverPublicNonce[:], serverNonce)
@@ -968,6 +992,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 		if err != nil {
 			return err
 		}
+	b.log.Debugf("coopSignBatchTx 7")
 
 		// Sanity check that we have all the nonces.
 		if !haveAllNonces {
@@ -978,6 +1003,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 		var digest [32]byte
 		copy(digest[:], sigHash)
 
+	b.log.Debugf("coopSignBatchTx 8")
 		// Since our MuSig2 session has all nonces, we can now create
 		// the local partial signature by signing the sig hash.
 		_, err = b.signerClient.MuSig2Sign(
@@ -986,26 +1012,32 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 		if err != nil {
 			return err
 		}
+	b.log.Debugf("coopSignBatchTx 9")
 
 		// Now combine the partial signatures to use the final combined
 		// signature in the sweep transaction's witness.
 		haveAllSigs, finalSig, err := b.signerClient.MuSig2CombineSig(
 			ctx, musig2SessionInfo.SessionID, [][]byte{serverSig},
 		)
+	b.log.Debug("coopSignBatchTx 10", haveAllSigs, finalSig, err)
 		if err != nil {
 			return err
 		}
+	b.log.Debugf("coopSignBatchTx 11")
 
 		if !haveAllSigs {
 			return fmt.Errorf("failed to combine signatures")
 		}
 
+		println("coopSignBatchTx 12", b.verifySchnorrSig)
+	b.log.Debugf("coopSignBatchTx 12", b.verifySchnorrSig)
 		// To be sure that we're good, parse and validate that the
 		// combined signature is indeed valid for the sig hash and the
 		// internal pubkey.
 		err = b.verifySchnorrSig(
 			htlcScript.TaprootKey, sigHash, finalSig,
 		)
+	b.log.Debugf("coopSignBatchTx 13")
 		if err != nil {
 			return err
 		}
@@ -1013,6 +1045,7 @@ func (b *batch) coopSignBatchTx(ctx context.Context, packet *psbt.Packet,
 		packet.UnsignedTx.TxIn[i].Witness = wire.TxWitness{
 			finalSig,
 		}
+	b.log.Debugf("coopSignBatchTx 14")
 	}
 
 	return nil

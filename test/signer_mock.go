@@ -72,6 +72,8 @@ func (s *mockSigner) MuSig2CreateSession(context.Context, input.MuSig2Version,
 	*keychain.KeyLocator, [][]byte, ...lndclient.MuSig2SessionOpts) (
 	*input.MuSig2SessionInfo, error) {
 
+	println("mockSigner.MuSig2CreateSession")
+
 	const testPubKey = "F9308A019258C31049344F85F89D5229B531C845836F99B08601F113BCE036F9"
 	pubKeyBytes, err := hex.DecodeString(testPubKey)
 	if err != nil {
