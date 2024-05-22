@@ -36,6 +36,8 @@ const (
 
 	// defaultBatchConfTarget is the default confirmation target of the
 	// batch transaction.
+	// TODO(Boris): this value is not used! It is overwritten with sweep's confTarget.
+	// TODO: remove the const.
 	defaultBatchConfTarget = 12
 
 	// batchConfHeight is the default confirmation height of the batch
