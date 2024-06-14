@@ -331,6 +331,14 @@ func NewSqlReadOpts() *SqliteTxOptions {
 	}
 }
 
+// NewSqlWriteOpts returns a new KeyStoreTxOptions instance triggers a write
+// (regular) transaction.
+func NewSqlWriteOpts() *SqliteTxOptions {
+	return &SqliteTxOptions{
+		readOnly: false,
+	}
+}
+
 // ReadOnly returns true if the transaction should be read only.
 //
 // NOTE: This implements the TxOptions interface.
