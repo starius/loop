@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -16,9 +17,9 @@ import (
 	"github.com/lightningnetwork/lnd/keychain"
 )
 
-// BaseDB is the interface that contains all the queries generated
+// Querier is the interface that contains all the queries generated
 // by sqlc for the reservation table.
-type BaseDB interface {
+type Querier interface {
 	// CreateReservation stores the reservation in the database.
 	CreateReservation(ctx context.Context,
 		arg sqlc.CreateReservationParams) error
@@ -35,14 +36,23 @@ type BaseDB interface {
 	// made.
 	GetReservations(ctx context.Context) ([]sqlc.Reservation, error)
 
-	// UpdateReservation inserts a new reservation update.
+	// InsertReservationUpdate inserts a new reservation update.
+	InsertReservationUpdate(ctx context.Context,
+		arg sqlc.InsertReservationUpdateParams) error
+
+	// UpdateReservation updates a reservation.
 	UpdateReservation(ctx context.Context,
 		arg sqlc.UpdateReservationParams) error
+}
+
+// BaseDB implements database methods and ExecTx.
+type BaseDB interface {
+	Querier
 
 	// ExecTx allows for executing a function in the context of a database
 	// transaction.
 	ExecTx(ctx context.Context, txOptions loopdb.TxOptions,
-		txBody func(*sqlc.Queries) error) error
+		txBody func(interface{}) error) error
 }
 
 // SQLStore manages the reservations in the database.
@@ -82,7 +92,12 @@ func (r *SQLStore) CreateReservation(ctx context.Context,
 	}
 
 	return r.baseDb.ExecTx(ctx, loopdb.NewSqlWriteOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(Querier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			err := q.CreateReservation(ctx, args)
 			if err != nil {
 				return err
@@ -122,7 +137,12 @@ func (r *SQLStore) UpdateReservation(ctx context.Context,
 	}
 
 	return r.baseDb.ExecTx(ctx, loopdb.NewSqlWriteOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(Querier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			err := q.UpdateReservation(ctx, updateArgs)
 			if err != nil {
 				return err
@@ -138,7 +158,12 @@ func (r *SQLStore) GetReservation(ctx context.Context,
 
 	var reservation *Reservation
 	err := r.baseDb.ExecTx(ctx, loopdb.NewSqlReadOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(Querier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			var err error
 			reservationRow, err := q.GetReservation(
 				ctx, reservationId[:],
@@ -182,7 +207,12 @@ func (r *SQLStore) ListReservations(ctx context.Context) ([]*Reservation,
 	var result []*Reservation
 
 	err := r.baseDb.ExecTx(ctx, loopdb.NewSqlReadOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(Querier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			var err error
 
 			reservations, err := q.GetReservations(ctx)

@@ -21,9 +21,9 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 )
 
-// InstantOutBaseDB is the interface that contains all the queries generated
+// InstantOutQuerier is the interface that contains all the queries generated
 // by sqlc for the instantout table.
-type InstantOutBaseDB interface {
+type InstantOutQuerier interface {
 	// InsertSwap inserts a new base swap.
 	InsertSwap(ctx context.Context, arg sqlc.InsertSwapParams) error
 
@@ -53,11 +53,17 @@ type InstantOutBaseDB interface {
 	// GetInstantOutSwaps retrieves all instant out swaps.
 	GetInstantOutSwaps(ctx context.Context) ([]sqlc.GetInstantOutSwapsRow,
 		error)
+}
+
+// InstantOutQuerier is the interface that contains all the queries generated
+// by sqlc for the instantout table and ExecTx.
+type InstantOutBaseDB interface {
+	InstantOutQuerier
 
 	// ExecTx allows for executing a function in the context of a database
 	// transaction.
 	ExecTx(ctx context.Context, txOptions loopdb.TxOptions,
-		txBody func(*sqlc.Queries) error) error
+		txBody func(interface{}) error) error
 }
 
 // ReservationStore is the interface that is required to load the reservations
@@ -133,7 +139,12 @@ func (s *SQLStore) CreateInstantLoopOut(ctx context.Context,
 	}
 
 	return s.baseDb.ExecTx(ctx, loopdb.NewSqlWriteOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(InstantOutQuerier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			err := q.InsertSwap(ctx, swapArgs)
 			if err != nil {
 				return err
@@ -205,7 +216,12 @@ func (s *SQLStore) UpdateInstantLoopOut(ctx context.Context,
 	}
 
 	return s.baseDb.ExecTx(ctx, loopdb.NewSqlWriteOpts(),
-		func(q *sqlc.Queries) error {
+		func(q0 interface{}) error {
+			q, ok := q0.(InstantOutQuerier)
+			if !ok {
+				return fmt.Errorf("q is of wrong type: %T", q0)
+			}
+
 			err := q.UpdateInstantOut(ctx, updateParams)
 			if err != nil {
 				return err

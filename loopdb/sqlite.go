@@ -198,7 +198,7 @@ func (db *BaseDB) BeginTx(ctx context.Context,
 // txBody needs to use when executing each one of the queries that need to be
 // applied atomically.
 func (db *BaseDB) ExecTx(ctx context.Context, txOptions TxOptions,
-	txBody func(*sqlc.Queries) error) error {
+	txBody func(interface{}) error) error {
 
 	// Create the db transaction.
 	tx, err := db.BeginTx(ctx, txOptions)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func (s *BaseDB) FetchLoopOutSwaps(ctx context.Context) ([]*LoopOut,
 
 	var loopOuts []*LoopOut
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(*sqlc.Queries) error {
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
 		swaps, err := s.Queries.GetLoopOutSwaps(ctx)
 		if err != nil {
 			return err
@@ -65,7 +66,7 @@ func (s *BaseDB) FetchLoopOutSwap(ctx context.Context,
 
 	var loopOut *LoopOut
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(*sqlc.Queries) error {
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
 		swap, err := s.Queries.GetLoopOutSwap(ctx, hash[:])
 		if err != nil {
 			return err
@@ -97,7 +98,12 @@ func (s *BaseDB) CreateLoopOut(ctx context.Context, hash lntypes.Hash,
 	swap *LoopOutContract) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		insertArgs := loopToInsertArgs(
 			hash, &swap.SwapContract,
 		)
@@ -135,7 +141,12 @@ func (s *BaseDB) BatchCreateLoopOut(ctx context.Context,
 	swaps map[lntypes.Hash]*LoopOutContract) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		for swapHash, swap := range swaps {
 			swap := swap
 
@@ -186,7 +197,7 @@ func (s *BaseDB) FetchLoopInSwaps(ctx context.Context) (
 
 	var loopIns []*LoopIn
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(*sqlc.Queries) error {
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
 		swaps, err := s.Queries.GetLoopInSwaps(ctx)
 		if err != nil {
 			return err
@@ -224,7 +235,12 @@ func (s *BaseDB) CreateLoopIn(ctx context.Context, hash lntypes.Hash,
 	swap *LoopInContract) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		insertArgs := loopToInsertArgs(
 			hash, &swap.SwapContract,
 		)
@@ -261,7 +277,12 @@ func (s *BaseDB) BatchCreateLoopIn(ctx context.Context,
 	swaps map[lntypes.Hash]*LoopInContract) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		for swapHash, swap := range swaps {
 			swap := swap
 
@@ -352,7 +373,12 @@ func (s *BaseDB) updateLoop(ctx context.Context, hash lntypes.Hash,
 	time time.Time, state SwapStateData) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		updateParams := sqlc.InsertSwapUpdateParams{
 			SwapHash:        hash[:],
 			UpdateTimestamp: time.UTC(),
@@ -380,7 +406,12 @@ func (s *BaseDB) BatchInsertUpdate(ctx context.Context,
 	updateData map[lntypes.Hash][]BatchInsertUpdateData) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return s.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return s.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		for swapHash, updates := range updateData {
 			for _, update := range updates {
 				updateParams := sqlc.InsertSwapUpdateParams{
@@ -413,7 +444,12 @@ func (b *BaseDB) BatchUpdateLoopOutSwapCosts(ctx context.Context,
 	costs map[lntypes.Hash]SwapCost) error {
 
 	writeOpts := NewSqlWriteOpts()
-	return b.ExecTx(ctx, writeOpts, func(tx *sqlc.Queries) error {
+	return b.ExecTx(ctx, writeOpts, func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
 		for swapHash, cost := range costs {
 			lastUpdateID, err := tx.GetLastUpdateID(
 				ctx, swapHash[:],
