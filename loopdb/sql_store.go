@@ -24,8 +24,13 @@ func (s *BaseDB) FetchLoopOutSwaps(ctx context.Context) ([]*LoopOut,
 
 	var loopOuts []*LoopOut
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
-		swaps, err := s.Queries.GetLoopOutSwaps(ctx)
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
+		swaps, err := tx.GetLoopOutSwaps(ctx)
 		if err != nil {
 			return err
 		}
@@ -33,7 +38,7 @@ func (s *BaseDB) FetchLoopOutSwaps(ctx context.Context) ([]*LoopOut,
 		loopOuts = make([]*LoopOut, len(swaps))
 
 		for i, swap := range swaps {
-			updates, err := s.Queries.GetSwapUpdates(
+			updates, err := tx.GetSwapUpdates(
 				ctx, swap.SwapHash,
 			)
 			if err != nil {
@@ -66,13 +71,18 @@ func (s *BaseDB) FetchLoopOutSwap(ctx context.Context,
 
 	var loopOut *LoopOut
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
-		swap, err := s.Queries.GetLoopOutSwap(ctx, hash[:])
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
+		swap, err := tx.GetLoopOutSwap(ctx, hash[:])
 		if err != nil {
 			return err
 		}
 
-		updates, err := s.Queries.GetSwapUpdates(ctx, swap.SwapHash)
+		updates, err := tx.GetSwapUpdates(ctx, swap.SwapHash)
 		if err != nil {
 			return err
 		}
@@ -197,8 +207,13 @@ func (s *BaseDB) FetchLoopInSwaps(ctx context.Context) (
 
 	var loopIns []*LoopIn
 
-	err := s.ExecTx(ctx, NewSqlReadOpts(), func(interface{}) error {
-		swaps, err := s.Queries.GetLoopInSwaps(ctx)
+	err := s.ExecTx(ctx, NewSqlReadOpts(), func(tx0 interface{}) error {
+		tx, ok := tx0.(sqlc.Querier)
+		if !ok {
+			return fmt.Errorf("tx is of wrong type: %T", tx0)
+		}
+
+		swaps, err := tx.GetLoopInSwaps(ctx)
 		if err != nil {
 			return err
 		}
@@ -206,7 +221,7 @@ func (s *BaseDB) FetchLoopInSwaps(ctx context.Context) (
 		loopIns = make([]*LoopIn, len(swaps))
 
 		for i, swap := range swaps {
-			updates, err := s.Queries.GetSwapUpdates(ctx, swap.SwapHash)
+			updates, err := tx.GetSwapUpdates(ctx, swap.SwapHash)
 			if err != nil {
 				return err
 			}
