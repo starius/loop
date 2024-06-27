@@ -489,11 +489,7 @@ func (b *Batcher) handleSweep(ctx context.Context, sweep *sweep,
 
 // spinUpBatch spins up a new batch and returns it.
 func (b *Batcher) spinUpBatch(ctx context.Context) (*batch, error) {
-	cfg := batchConfig{
-		maxTimeoutDistance: defaultMaxTimeoutDistance,
-		noBumping:          b.noBumping,
-		customMuSig2Signer: b.customMuSig2Signer,
-	}
+	cfg := b.newBatchConfig(defaultMaxTimeoutDistance)
 
 	switch b.chainParams {
 	case &chaincfg.MainNetParams:
@@ -608,11 +604,7 @@ func (b *Batcher) spinUpBatchFromDB(ctx context.Context, batch *batch) error {
 		quit:             b.quit,
 	}
 
-	cfg := batchConfig{
-		maxTimeoutDistance: batch.cfg.maxTimeoutDistance,
-		noBumping:          b.noBumping,
-		customMuSig2Signer: b.customMuSig2Signer,
-	}
+	cfg := b.newBatchConfig(batch.cfg.maxTimeoutDistance)
 
 	newBatch, err := NewBatchFromDB(cfg, batchKit)
 	if err != nil {
@@ -672,11 +664,7 @@ func (b *Batcher) FetchUnconfirmedBatches(ctx context.Context) ([]*batch,
 		}
 		batch.rbfCache = rbfCache
 
-		bchCfg := batchConfig{
-			maxTimeoutDistance: bch.MaxTimeoutDistance,
-			noBumping:          b.noBumping,
-			customMuSig2Signer: b.customMuSig2Signer,
-		}
+		bchCfg := b.newBatchConfig(bch.MaxTimeoutDistance)
 		batch.cfg = &bchCfg
 
 		batches = append(batches, &batch)
@@ -897,4 +885,13 @@ func (b *Batcher) loadSweep(ctx context.Context, swapHash lntypes.Hash,
 		destAddr:               s.DestAddr,
 		minFeeRate:             s.MinFeeRate,
 	}, nil
+}
+
+// newBatchConfig creates new batch config.
+func (b *Batcher) newBatchConfig(maxTimeoutDistance int32) batchConfig {
+	return batchConfig{
+		maxTimeoutDistance: maxTimeoutDistance,
+		noBumping:          b.noBumping,
+		customMuSig2Signer: b.customMuSig2Signer,
+	}
 }
