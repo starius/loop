@@ -121,6 +121,11 @@ type SweepInfo struct {
 
 	// DestAddr is the destination address of the sweep.
 	DestAddr btcutil.Address
+
+	// NonCoopHint is set, if the sweep can not be spend cooperatively and
+	// has to be spent using preimage. This is only used in fee estimations
+	// when selecting a batch for the sweep to minimize fees.
+	NonCoopHint bool
 }
 
 // SweepFetcher is used to get details of a sweep.
@@ -465,6 +470,19 @@ func (b *Batcher) handleSweep(ctx context.Context, sweep *sweep,
 		}
 	}
 
+	// If custom fee rate provider is used, run the greedy algorithm of
+	// batch selection to minimize costs.
+	if b.customFeeRate != nil {
+		err := b.greedyAddSweep(ctx, sweep)
+		if err == nil {
+			// The greedy algorithm succeeded.
+			return nil
+		}
+
+		log.Warnf("Greedy batch selection algorithm failed for sweep "+
+			"%x, falling back to old approach.", sweep.swapHash[:6])
+	}
+
 	// If one of the batches accepts the sweep, we provide it to that batch.
 	for _, batch := range b.batches {
 		accepted, err := batch.addSweep(ctx, sweep)
@@ -481,6 +499,12 @@ func (b *Batcher) handleSweep(ctx context.Context, sweep *sweep,
 
 	// If no batch is capable of accepting the sweep, we spin up a fresh
 	// batch and hand the sweep over to it.
+	return b.launchNewBatch(ctx, sweep)
+}
+
+// launchNewBatch creates new batch, starts it and adds the sweep to it.
+func (b *Batcher) launchNewBatch(ctx context.Context, sweep *sweep) error {
+	// Spin up a fresh batch.
 	batch, err := b.spinUpBatch(ctx)
 	if err != nil {
 		return err
@@ -889,6 +913,7 @@ func (b *Batcher) loadSweep(ctx context.Context, swapHash lntypes.Hash,
 		isExternalAddr:         s.IsExternalAddr,
 		destAddr:               s.DestAddr,
 		minFeeRate:             minFeeRate,
+		nonCoopHint:            s.NonCoopHint,
 	}, nil
 }
 
