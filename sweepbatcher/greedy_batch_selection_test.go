@@ -17,7 +17,7 @@ const (
 	lowFeeRate  = chainfee.FeePerKwFloor
 	highFeeRate = chainfee.SatPerKWeight(30000)
 
-	coopInputWeight       = lntypes.WeightUnit(231)
+	coopInputWeight       = lntypes.WeightUnit(230)
 	nonCoopInputWeight    = lntypes.WeightUnit(521)
 	nonCoopPenalty        = nonCoopInputWeight - coopInputWeight
 	coopNewBatchWeight    = lntypes.WeightUnit(396)
@@ -81,7 +81,7 @@ func TestEstimateSweepFeeIncrement(t *testing.T) {
 			},
 			wantNewBatchFeeDetails: feeDetails{
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(445),
+				CoopWeight:    lntypes.WeightUnit(444),
 				NonCoopWeight: lntypes.WeightUnit(735),
 			},
 		},
@@ -99,7 +99,7 @@ func TestEstimateSweepFeeIncrement(t *testing.T) {
 			},
 			wantNewBatchFeeDetails: feeDetails{
 				FeeRate:       highFeeRate,
-				CoopWeight:    lntypes.WeightUnit(445),
+				CoopWeight:    lntypes.WeightUnit(444),
 				NonCoopWeight: lntypes.WeightUnit(735),
 			},
 		},
@@ -120,7 +120,7 @@ func TestEstimateSweepFeeIncrement(t *testing.T) {
 			},
 			wantNewBatchFeeDetails: feeDetails{
 				FeeRate:        lowFeeRate,
-				CoopWeight:     lntypes.WeightUnit(445),
+				CoopWeight:     lntypes.WeightUnit(444),
 				NonCoopWeight:  lntypes.WeightUnit(735),
 				IsExternalAddr: true,
 			},
@@ -142,7 +142,7 @@ func TestEstimateSweepFeeIncrement(t *testing.T) {
 			},
 			wantNewBatchFeeDetails: feeDetails{
 				FeeRate:        lowFeeRate,
-				CoopWeight:     lntypes.WeightUnit(409),
+				CoopWeight:     lntypes.WeightUnit(408),
 				NonCoopWeight:  lntypes.WeightUnit(699),
 				IsExternalAddr: true,
 			},
@@ -163,7 +163,7 @@ func TestEstimateSweepFeeIncrement(t *testing.T) {
 			},
 			wantNewBatchFeeDetails: feeDetails{
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(445),
+				CoopWeight:    lntypes.WeightUnit(444),
 				NonCoopWeight: lntypes.WeightUnit(735),
 				NonCoopHint:   true,
 			},
@@ -218,7 +218,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:       1,
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(445),
+				CoopWeight:    lntypes.WeightUnit(444),
 				NonCoopWeight: lntypes.WeightUnit(735),
 			},
 		},
@@ -242,7 +242,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:       1,
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(676),
+				CoopWeight:    lntypes.WeightUnit(674),
 				NonCoopWeight: lntypes.WeightUnit(1256),
 			},
 		},
@@ -266,7 +266,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:       1,
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(676),
+				CoopWeight:    lntypes.WeightUnit(674),
 				NonCoopWeight: lntypes.WeightUnit(1103),
 			},
 		},
@@ -287,7 +287,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:       1,
 				FeeRate:       highFeeRate,
-				CoopWeight:    lntypes.WeightUnit(445),
+				CoopWeight:    lntypes.WeightUnit(444),
 				NonCoopWeight: lntypes.WeightUnit(735),
 			},
 		},
@@ -312,7 +312,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:       1,
 				FeeRate:       lowFeeRate,
-				CoopWeight:    lntypes.WeightUnit(676),
+				CoopWeight:    lntypes.WeightUnit(674),
 				NonCoopWeight: lntypes.WeightUnit(1256),
 				NonCoopHint:   true,
 			},
@@ -336,7 +336,7 @@ func TestEstimateBatchWeight(t *testing.T) {
 			wantBatchFeeDetails: feeDetails{
 				BatchId:        1,
 				FeeRate:        lowFeeRate,
-				CoopWeight:     lntypes.WeightUnit(445),
+				CoopWeight:     lntypes.WeightUnit(444),
 				NonCoopWeight:  lntypes.WeightUnit(735),
 				IsExternalAddr: true,
 			},
