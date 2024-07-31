@@ -134,8 +134,13 @@ type batchConfig struct {
 	// batchConfTarget is the confirmation target of the batch transaction.
 	batchConfTarget int32
 
-	// batchPublishDelay is the delay between receiving a new block and
-	// publishing the batch transaction.
+	// waitingPeriod is the delay of first batch publishing after creation.
+	// It only affects newly created batches, not batches loaded from DB,
+	// so publishing does happen in case of a crashloop.
+	waitingPeriod time.Duration
+
+	// batchPublishDelay is the delay between receiving a new block or
+	// waiting period completion and publishing the batch transaction.
 	batchPublishDelay time.Duration
 
 	// noBumping instructs sweepbatcher not to fee bump itself and rely on
@@ -543,10 +548,25 @@ func (b *batch) Run(ctx context.Context) error {
 		}
 	}
 
+	// skipBefore is the time before which we skip batch publishing.
+	// This is needed to facilitate better grouping of sweeps.
+	// For batches loaded from DB waitingPeriod should be 0.
+	skipBefore := time.Now().Add(b.cfg.waitingPeriod)
+
+	// waitingEndChan is a timer which fires upon waiting period end.
+	// If waitingPeriod is 0, it does not fire to prevent race with
+	// blockChan which also fires immediately with current tip. Such a race
+	// may result in double publishing if batchPublishDelay is also 0.
+	var waitingEndChan <-chan time.Time
+	if b.cfg.waitingPeriod > 0 {
+		waitingEndChan = time.After(b.cfg.waitingPeriod)
+	}
+
 	// We use a timer in order to not publish new transactions at the same
 	// time as the block epoch notification. This is done to prevent
 	// unnecessary transaction publishments when a spend is detected on that
-	// block.
+	// block. This timer starts after new block arrives or waitingPeriod
+	// completes.
 	var timerChan <-chan time.Time
 
 	b.log.Infof("started, primary %x, total sweeps %v",
@@ -557,6 +577,7 @@ func (b *batch) Run(ctx context.Context) error {
 		case <-b.callEnter:
 			<-b.callLeave
 
+		// blockChan provides immediately the current tip.
 		case height := <-blockChan:
 			b.log.Debugf("received block %v", height)
 
@@ -565,8 +586,50 @@ func (b *batch) Run(ctx context.Context) error {
 			timerChan = time.After(b.cfg.batchPublishDelay)
 			b.currentHeight = height
 
+			// Check if the batch became urgent.
+			timeout := b.timeout()
+			if timeout <= 0 {
+				b.log.Warnf("Method timeout() returned %v. "+
+					"Number of sweeps: %d. It may be an"+
+					" empty batch.", timeout, len(b.sweeps))
+				continue
+			}
+
+			blocksToTimeout := timeout - height
+			const blockTime = 10 * time.Minute
+			timeBank := time.Duration(blocksToTimeout) * blockTime
+
+			// We want to have at least 2x as much time to be safe.
+			const safetyFactor = 2
+			remainingWaiting := time.Until(skipBefore)
+			if timeBank >= safetyFactor*remainingWaiting {
+				// There is enough time, keep waiting.
+				continue
+			}
+
+			// Reset waitingPeriod by setting skipBefore to now.
+			// It will be published when timerChan fires (in
+			// batchPublishDelay seconds).
+			skipBefore = time.Now()
+
+			b.log.Debugf("cancelling waiting for urgent sweep "+
+				"(timeBank is %v, remainingWaiting is %v)",
+				timeBank, remainingWaiting)
+
+		case <-waitingEndChan:
+			b.log.Debugf("waiting period of duration %v has ended",
+				b.cfg.waitingPeriod)
+
+			// Set the timer to publish the batch transaction after
+			// the configured delay.
+			timerChan = time.After(b.cfg.batchPublishDelay)
+
 		case <-timerChan:
-			if b.state == Open {
+			// Check that batch is still open and that the waiting
+			// period has ended. We have also batchPublishDelay on
+			// top of waitingPeriod, so if waitingEndChan has just
+			// fired, this time check must pass.
+			if b.state == Open && !skipBefore.After(time.Now()) {
 				err := b.publish(ctx)
 				if err != nil {
 					return err
@@ -602,6 +665,20 @@ func (b *batch) Run(ctx context.Context) error {
 			return runCtx.Err()
 		}
 	}
+}
+
+// timeout returns minimum timeout as block height among sweeps of the batch.
+// If the batch is empty, return -1.
+func (b *batch) timeout() int32 {
+	// Find minimum amond sweeps' timeouts.
+	minTimeout := int32(-1)
+	for _, sweep := range b.sweeps {
+		if minTimeout == -1 || minTimeout < sweep.timeout {
+			minTimeout = sweep.timeout
+		}
+	}
+
+	return minTimeout
 }
 
 // publish creates and publishes the latest batch transaction to the network.

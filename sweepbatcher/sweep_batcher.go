@@ -253,6 +253,13 @@ type Batcher struct {
 	// exit.
 	wg sync.WaitGroup
 
+	// waitingPeriod is the delay of first batch publishing after creation.
+	// It only affects newly created batches, not batches loaded from DB,
+	// so publishing does happen in case of a crashloop. If a sweep is about
+	// to expire (time until timeout is less that 2x waitingPeriod), then
+	// waiting is skipped.
+	waitingPeriod time.Duration
+
 	// customFeeRate provides custom min fee rate per swap. The batch uses
 	// max of the fee rates of its swaps. In this mode confTarget is
 	// ignored and fee bumping by sweepbatcher is disabled.
@@ -267,6 +274,13 @@ type Batcher struct {
 
 // BatcherConfig holds batcher configuration.
 type BatcherConfig struct {
+	// waitingPeriod is the delay of first batch publishing after creation.
+	// It only affects newly created batches, not batches loaded from DB,
+	// so publishing does happen in case of a crashloop. If a sweep is about
+	// to expire (time until timeout is less that 2x waitingPeriod), then
+	// waiting is skipped.
+	waitingPeriod time.Duration
+
 	// customFeeRate provides custom min fee rate per swap. The batch uses
 	// max of the fee rates of its swaps. In this mode confTarget is
 	// ignored and fee bumping by sweepbatcher is disabled.
@@ -281,6 +295,17 @@ type BatcherConfig struct {
 
 // BatcherOption configures batcher behaviour.
 type BatcherOption func(*BatcherConfig)
+
+// WithWaitingPeriod instructs sweepbatcher to wait for the duration provided
+// after new batch creation before it is first published. This facilitates
+// better grouping. Defaults to 0s (no waiting period). If a sweep is about
+// to expire (time until timeout is less that 2x waitingPeriod), then waiting
+// is skipped.
+func WithWaitingPeriod(waitingPeriod time.Duration) BatcherOption {
+	return func(cfg *BatcherConfig) {
+		cfg.waitingPeriod = waitingPeriod
+	}
+}
 
 // WithCustomFeeRate instructs sweepbatcher not to fee bump itself and rely on
 // external source of fee rates (FeeRateProvider). To apply a fee rate change,
@@ -334,6 +359,7 @@ func NewBatcher(wallet lndclient.WalletKitClient,
 		chainParams:        chainparams,
 		store:              store,
 		sweepStore:         sweepStore,
+		waitingPeriod:      cfg.waitingPeriod,
 		customFeeRate:      cfg.customFeeRate,
 		customMuSig2Signer: cfg.customMuSig2Signer,
 	}
@@ -539,6 +565,12 @@ func (b *Batcher) spinUpBatch(ctx context.Context) (*batch, error) {
 		cfg.batchPublishDelay = defaultTestnetPublishDelay
 	}
 
+	if b.waitingPeriod < 0 {
+		return nil, fmt.Errorf("negative waitingPeriod: %v",
+			b.waitingPeriod)
+	}
+	cfg.waitingPeriod = b.waitingPeriod
+
 	batchKit := b.newBatchKit()
 
 	batch := NewBatch(cfg, batchKit)
@@ -626,6 +658,8 @@ func (b *Batcher) spinUpBatchFromDB(ctx context.Context, batch *batch) error {
 
 	cfg := b.newBatchConfig(batch.cfg.maxTimeoutDistance)
 
+	// Note that waitingPeriod and batchPublishDelay are 0 for batches
+	// recovered from DB so publishing happen in case of crashloop.
 	newBatch, err := NewBatchFromDB(cfg, batchKit)
 	if err != nil {
 		return fmt.Errorf("failed in NewBatchFromDB: %w", err)
