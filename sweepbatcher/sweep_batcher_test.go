@@ -548,6 +548,270 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 	}, test.Timeout, eventuallyCheckFrequency)
 }
 
+// testDelays tests that WithWaitingPeriod and WithPublishDelay work.
+func testDelays(t *testing.T, store testStore,
+	batcherStore testBatcherStore) {
+
+	// Set waiting period and publish delay.
+	const (
+		waitingPeriod = 4 * time.Second
+		publishDelay  = 3 * time.Second
+		testTimeout   = (waitingPeriod + publishDelay) * 3
+	)
+
+	// Test timeout is larger than usual (5s), because we wait for
+	// waitingPeriod and publishDelay in this test.
+	defer test.Guard(t, test.WithGuardTimeout(testTimeout))()
+
+	lnd := test.NewMockLnd()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sweepStore, err := NewSweepFetcherFromSwapStore(store, lnd.ChainParams)
+	require.NoError(t, err)
+
+	batcher := NewBatcher(
+		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
+		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
+		batcherStore, sweepStore, WithWaitingPeriod(waitingPeriod),
+		WithPublishDelay(publishDelay),
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var runErr error
+	go func() {
+		defer wg.Done()
+		runErr = batcher.Run(ctx)
+	}()
+
+	// Wait for the batcher to be initialized.
+	<-batcher.initDone
+
+	// Create a sweep request.
+	sweepReq := SweepRequest{
+		SwapHash: lntypes.Hash{1, 1, 1},
+		Value:    111,
+		Outpoint: wire.OutPoint{
+			Hash:  chainhash.Hash{1, 1},
+			Index: 1,
+		},
+		Notifier: &dummyNotifier,
+	}
+
+	swap := &loopdb.LoopOutContract{
+		SwapContract: loopdb.SwapContract{
+			CltvExpiry:      1000,
+			AmountRequested: 111,
+			ProtocolVersion: loopdb.ProtocolVersionMuSig2,
+			HtlcKeys:        htlcKeys,
+		},
+
+		DestAddr:        destAddr,
+		SwapInvoice:     swapInvoice,
+		SweepConfTarget: 123,
+	}
+
+	err = store.CreateLoopOut(ctx, sweepReq.SwapHash, swap)
+	require.NoError(t, err)
+	store.AssertLoopOutStored()
+
+	t1 := time.Now()
+
+	// Deliver sweep request to batcher.
+	require.NoError(t, batcher.AddSweep(&sweepReq))
+
+	// Since a batch was created we check that it registered for its primary
+	// sweep's spend.
+	<-lnd.RegisterSpendChannel
+
+	// Wait for tx to be published.
+	<-lnd.TxPublishChannel
+
+	// Make sure that sweepbatcher has been waiting for enough time.
+	require.Greater(t, time.Since(t1), waitingPeriod+publishDelay)
+
+	// Once batcher receives sweep request it will eventually spin up a
+	// batch.
+	require.Eventually(t, func() bool {
+		// Make sure that the sweep was stored
+		if !batcherStore.AssertSweepStored(sweepReq.SwapHash) {
+			return false
+		}
+
+		// Make sure there is exactly one active batch.
+		if len(batcher.batches) != 1 {
+			return false
+		}
+
+		// Get the batch.
+		batch := getOnlyBatch(batcher)
+
+		// Make sure the batch has one sweep.
+		return len(batch.sweeps) == 1
+	}, test.Timeout, eventuallyCheckFrequency)
+
+	// Make sure we have stored the batch.
+	batches, err := batcherStore.FetchUnconfirmedSweepBatches(ctx)
+	require.NoError(t, err)
+	require.Len(t, batches, 1)
+
+	// Now make the batcher quit by canceling the context.
+	cancel()
+	wg.Wait()
+
+	// Make sure the batcher exited without an error.
+	checkBatcherError(t, runErr)
+
+	// Now launch it again.
+	batcher = NewBatcher(
+		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
+		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
+		batcherStore, sweepStore, WithWaitingPeriod(waitingPeriod),
+		WithPublishDelay(publishDelay),
+	)
+	ctx, cancel = context.WithCancel(context.Background())
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = batcher.Run(ctx)
+	}()
+
+	// Wait for the batcher to be initialized.
+	<-batcher.initDone
+
+	t1 = time.Now()
+
+	// Wait for batch to load.
+	require.Eventually(t, func() bool {
+		// Make sure that the sweep was stored
+		if !batcherStore.AssertSweepStored(sweepReq.SwapHash) {
+			return false
+		}
+
+		// Make sure there is exactly one active batch.
+		if len(batcher.batches) != 1 {
+			return false
+		}
+
+		// Get the batch.
+		batch := getOnlyBatch(batcher)
+
+		// Make sure the batch has one sweep.
+		return len(batch.sweeps) == 1
+	}, test.Timeout, eventuallyCheckFrequency)
+
+	// Expect registration for spend notification.
+	<-lnd.RegisterSpendChannel
+
+	// Wait for tx to be published.
+	<-lnd.TxPublishChannel
+
+	// Make sure that sweepbatcher does not wait in recovered batches.
+	require.Less(t, time.Since(t1), publishDelay)
+
+	t1 = time.Now()
+
+	// Tick tock next block.
+	err = lnd.NotifyHeight(601)
+	require.NoError(t, err)
+
+	// Wait for tx to be published.
+	<-lnd.TxPublishChannel
+
+	// Make sure sweepbatcher does not wait for recovered batches after
+	// new block arrives as well.
+	require.Less(t, time.Since(t1), publishDelay)
+
+	// Now make the batcher quit by canceling the context.
+	cancel()
+	wg.Wait()
+
+	// Make sure the batcher exited without an error.
+	checkBatcherError(t, runErr)
+
+	// Now test for large waitingPeriod and make sure it is cancelled
+	// for an urgent sweep.
+	const largeWaitingPeriod = 6 * time.Hour
+
+	batcher = NewBatcher(
+		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
+		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
+		batcherStore, sweepStore, WithWaitingPeriod(largeWaitingPeriod),
+		WithPublishDelay(publishDelay),
+	)
+	ctx, cancel = context.WithCancel(context.Background())
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = batcher.Run(ctx)
+	}()
+
+	// Wait for the batcher to be initialized.
+	<-batcher.initDone
+
+	// Get spend notification and tx publication for the first batch.
+	<-lnd.RegisterSpendChannel
+	<-lnd.TxPublishChannel
+
+	// Create a sweep request which is about to expire.
+	sweepReq2 := SweepRequest{
+		SwapHash: lntypes.Hash{2, 2, 2},
+		Value:    111,
+		Outpoint: wire.OutPoint{
+			Hash:  chainhash.Hash{2, 2},
+			Index: 1,
+		},
+		Notifier: &dummyNotifier,
+	}
+
+	swap2 := &loopdb.LoopOutContract{
+		SwapContract: loopdb.SwapContract{
+			// CltvExpiry will expire soon.
+			CltvExpiry: 605,
+
+			AmountRequested: 111,
+			ProtocolVersion: loopdb.ProtocolVersionMuSig2,
+			HtlcKeys:        htlcKeys,
+
+			// Make preimage unique to pass SQL constraints.
+			Preimage: lntypes.Preimage{2},
+		},
+
+		DestAddr:        destAddr,
+		SwapInvoice:     swapInvoice,
+		SweepConfTarget: 123,
+	}
+
+	err = store.CreateLoopOut(ctx, sweepReq2.SwapHash, swap2)
+	require.NoError(t, err)
+	store.AssertLoopOutStored()
+
+	t1 = time.Now()
+
+	// Deliver sweep request to batcher.
+	require.NoError(t, batcher.AddSweep(&sweepReq2))
+
+	// Expect the sweep to be added to new batch.
+	<-lnd.RegisterSpendChannel
+
+	// Wait for tx to be published.
+	tx := <-lnd.TxPublishChannel
+	require.Equal(t, 1, len(tx.TxIn))
+
+	// Make sure that sweepbatcher has been waiting for at least
+	// publishDelay, but less than largeWaitingPeriod+publishDelay.
+	require.Greater(t, time.Since(t1), publishDelay)
+	require.Less(t, time.Since(t1), largeWaitingPeriod+publishDelay)
+
+	// Now make the batcher quit by canceling the context.
+	cancel()
+	wg.Wait()
+
+	// Make sure the batcher exited without an error.
+	checkBatcherError(t, runErr)
+}
+
 // testSweepBatcherSweepReentry tests that when an old version of the batch tx
 // gets confirmed the sweep leftovers are sent back to the batcher.
 func testSweepBatcherSweepReentry(t *testing.T, store testStore,
@@ -2282,6 +2546,11 @@ func TestFeeBumping(t *testing.T) {
 // that are created and run by the batcher.
 func TestSweepBatcherSimpleLifecycle(t *testing.T) {
 	runTests(t, testSweepBatcherSimpleLifecycle)
+}
+
+// TestDelays tests that WithWaitingPeriod and WithPublishDelay work.
+func TestDelays(t *testing.T) {
+	runTests(t, testDelays)
 }
 
 // TestSweepBatcherSweepReentry tests that when an old version of the batch tx
