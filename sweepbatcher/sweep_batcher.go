@@ -16,6 +16,7 @@ import (
 	"github.com/lightninglabs/loop/loopdb"
 	"github.com/lightninglabs/loop/swap"
 	"github.com/lightninglabs/loop/utils"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
@@ -266,6 +267,9 @@ type Batcher struct {
 	// value is always 0s, regardless of this setting.
 	publishDelay time.Duration
 
+	// clock provides methods to work with time and timers.
+	clock clock.Clock
+
 	// customFeeRate provides custom min fee rate per swap. The batch uses
 	// max of the fee rates of its swaps. In this mode confTarget is
 	// ignored and fee bumping by sweepbatcher is disabled.
@@ -292,6 +296,9 @@ type BatcherConfig struct {
 	// after the end of waiting period. For batches recovered from DB this
 	// value is always 0s, regardless of this setting.
 	publishDelay time.Duration
+
+	// clock provides methods to work with time and timers.
+	clock clock.Clock
 
 	// customFeeRate provides custom min fee rate per swap. The batch uses
 	// max of the fee rates of its swaps. In this mode confTarget is
@@ -331,6 +338,14 @@ func WithPublishDelay(publishDelay time.Duration) BatcherOption {
 	}
 }
 
+// WithClock sets the clock used by sweepbatcher and its batches. It is needed
+// to manipulate time in tests.
+func WithClock(clock clock.Clock) BatcherOption {
+	return func(cfg *BatcherConfig) {
+		cfg.clock = clock
+	}
+}
+
 // WithCustomFeeRate instructs sweepbatcher not to fee bump itself and rely on
 // external source of fee rates (FeeRateProvider). To apply a fee rate change,
 // the caller should re-add the sweep by calling AddSweep.
@@ -364,6 +379,11 @@ func NewBatcher(wallet lndclient.WalletKitClient,
 		opt(&cfg)
 	}
 
+	// If WithClock was not provided, use default clock.
+	if cfg.clock == nil {
+		cfg.clock = clock.NewDefaultClock()
+	}
+
 	if cfg.customMuSig2Signer != nil && musig2ServerSigner != nil {
 		panic("customMuSig2Signer must not be used with " +
 			"musig2ServerSigner")
@@ -385,6 +405,7 @@ func NewBatcher(wallet lndclient.WalletKitClient,
 		sweepStore:         sweepStore,
 		waitingPeriod:      cfg.waitingPeriod,
 		publishDelay:       cfg.publishDelay,
+		clock:              cfg.clock,
 		customFeeRate:      cfg.customFeeRate,
 		customMuSig2Signer: cfg.customMuSig2Signer,
 	}
@@ -1001,6 +1022,7 @@ func (b *Batcher) newBatchConfig(maxTimeoutDistance int32) batchConfig {
 		maxTimeoutDistance: maxTimeoutDistance,
 		noBumping:          b.customFeeRate != nil,
 		customMuSig2Signer: b.customMuSig2Signer,
+		clock:              b.clock,
 	}
 }
 

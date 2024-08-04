@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/lightninglabs/loop/test"
 	"github.com/lightninglabs/loop/utils"
 	"github.com/lightningnetwork/lnd/chainntnfs"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
@@ -548,6 +550,20 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 	}, test.Timeout, eventuallyCheckFrequency)
 }
 
+// wrappedLogger implements btclog.Logger, recording last debug message format.
+// It is needed to watch for messages in tests.
+type wrappedLogger struct {
+	btclog.Logger
+
+	lastMessageFormat string
+}
+
+// Debugf logs debug message.
+func (l *wrappedLogger) Debugf(format string, params ...interface{}) {
+	l.lastMessageFormat = format
+	l.Logger.Debugf(format, params...)
+}
+
 // testDelays tests that WithWaitingPeriod and WithPublishDelay work.
 func testDelays(t *testing.T, store testStore,
 	batcherStore testBatcherStore) {
@@ -559,9 +575,7 @@ func testDelays(t *testing.T, store testStore,
 		testTimeout   = (waitingPeriod + publishDelay) * 3
 	)
 
-	// Test timeout is larger than usual (5s), because we wait for
-	// waitingPeriod and publishDelay in this test.
-	defer test.Guard(t, test.WithGuardTimeout(testTimeout))()
+	defer test.Guard(t)()
 
 	lnd := test.NewMockLnd()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -569,11 +583,15 @@ func testDelays(t *testing.T, store testStore,
 	sweepStore, err := NewSweepFetcherFromSwapStore(store, lnd.ChainParams)
 	require.NoError(t, err)
 
+	startTime := time.Date(2018, 11, 1, 0, 0, 0, 0, time.UTC)
+	tickSignal := make(chan time.Duration)
+	testClock := clock.NewTestClockWithTickSignal(startTime, tickSignal)
+
 	batcher := NewBatcher(
 		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
 		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
 		batcherStore, sweepStore, WithWaitingPeriod(waitingPeriod),
-		WithPublishDelay(publishDelay),
+		WithPublishDelay(publishDelay), WithClock(testClock),
 	)
 
 	var wg sync.WaitGroup
@@ -616,20 +634,81 @@ func testDelays(t *testing.T, store testStore,
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	t1 := time.Now()
-
 	// Deliver sweep request to batcher.
 	require.NoError(t, batcher.AddSweep(&sweepReq))
 
-	// Since a batch was created we check that it registered for its primary
-	// sweep's spend.
-	<-lnd.RegisterSpendChannel
+	// Expect two timers to be set: waitingPeriod and publishDelay,
+	// and RegisterSpend to be called. The order is not determined,
+	// so catch these actions from two separate goroutines.
+	var wg2 sync.WaitGroup
+
+	wg2.Add(1)
+	go func() {
+		defer wg2.Done()
+
+		// Since a batch was created we check that it registered for its
+		// primary sweep's spend.
+		<-lnd.RegisterSpendChannel
+	}()
+
+	wg2.Add(1)
+	var delays []time.Duration
+	go func() {
+		defer wg2.Done()
+
+		// Expect two timers: waitingPeriod and publishDelay.
+		delays = append(delays, <-tickSignal)
+		delays = append(delays, <-tickSignal)
+	}()
+
+	// Wait for RegisterSpend and for timer registrations.
+	wg2.Wait()
+
+	// Expect timer for waitingPeriod and publishDelay to be registered.
+	wantDelays := []time.Duration{waitingPeriod, publishDelay}
+	require.Equal(t, wantDelays, delays)
+
+	// Eventually the batch is launched.
+	require.Eventually(t, func() bool {
+		return len(batcher.batches) == 1
+	}, test.Timeout, eventuallyCheckFrequency)
+
+	// Replace the logger in the batch with wrappedLogger to watch messages.
+	var theBatch *batch
+	for _, batch := range batcher.batches {
+		theBatch = batch
+	}
+	require.NotNil(t, theBatch)
+	testLogger := &wrappedLogger{Logger: theBatch.log}
+	theBatch.log = testLogger
+
+	// Advance the clock to publishDelay. It will trigger the publishDelay
+	// timer, but won't result in publishing, because of waitingPeriod.
+	now := startTime.Add(publishDelay)
+	testClock.SetTime(now)
+
+	// Wait for batch publishing to be skipped, because waitingPeriod
+	// has not ended.
+	require.Eventually(t, func() bool {
+		return strings.Contains(
+			testLogger.lastMessageFormat,
+			stillWaitingMsg,
+		)
+	}, test.Timeout, eventuallyCheckFrequency)
+
+	// Advance the clock to the end of waitingPeriod.
+	now = startTime.Add(waitingPeriod)
+	testClock.SetTime(now)
+
+	// Expect timer for publishDelay to be registered.
+	require.Equal(t, publishDelay, <-tickSignal)
+
+	// Advance the clock.
+	now = now.Add(publishDelay)
+	testClock.SetTime(now)
 
 	// Wait for tx to be published.
 	<-lnd.TxPublishChannel
-
-	// Make sure that sweepbatcher has been waiting for enough time.
-	require.Greater(t, time.Since(t1), waitingPeriod+publishDelay)
 
 	// Once batcher receives sweep request it will eventually spin up a
 	// batch.
@@ -663,12 +742,16 @@ func testDelays(t *testing.T, store testStore,
 	// Make sure the batcher exited without an error.
 	checkBatcherError(t, runErr)
 
+	// Advance the clock by 1 second.
+	now = now.Add(time.Second)
+	testClock.SetTime(now)
+
 	// Now launch it again.
 	batcher = NewBatcher(
 		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
 		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
 		batcherStore, sweepStore, WithWaitingPeriod(waitingPeriod),
-		WithPublishDelay(publishDelay),
+		WithPublishDelay(publishDelay), WithClock(testClock),
 	)
 	ctx, cancel = context.WithCancel(context.Background())
 	wg.Add(1)
@@ -679,8 +762,6 @@ func testDelays(t *testing.T, store testStore,
 
 	// Wait for the batcher to be initialized.
 	<-batcher.initDone
-
-	t1 = time.Now()
 
 	// Wait for batch to load.
 	require.Eventually(t, func() bool {
@@ -701,27 +782,58 @@ func testDelays(t *testing.T, store testStore,
 		return len(batch.sweeps) == 1
 	}, test.Timeout, eventuallyCheckFrequency)
 
-	// Expect registration for spend notification.
-	<-lnd.RegisterSpendChannel
+	// Expect a timer to be set: 0 (instead of publishDelay), and
+	// RegisterSpend to be called. The order is not determined, so catch
+	// these actions from two separate goroutines.
+	var wg3 sync.WaitGroup
+
+	wg3.Add(1)
+	go func() {
+		defer wg3.Done()
+
+		// Since a batch was created we check that it registered for its
+		// primary sweep's spend.
+		<-lnd.RegisterSpendChannel
+	}()
+
+	wg3.Add(1)
+	delays = nil
+	go func() {
+		defer wg3.Done()
+
+		// Expect one timer: publishDelay (0).
+		delays = append(delays, <-tickSignal)
+	}()
+
+	// Wait for RegisterSpend and for timer registration.
+	wg3.Wait()
+
+	// Expect one timer: publishDelay (0).
+	wantDelays = []time.Duration{0}
+	require.Equal(t, wantDelays, delays)
+
+	// Advance the clock.
+	now = now.Add(time.Millisecond)
+	testClock.SetTime(now)
 
 	// Wait for tx to be published.
 	<-lnd.TxPublishChannel
-
-	// Make sure that sweepbatcher does not wait in recovered batches.
-	require.Less(t, time.Since(t1), publishDelay)
-
-	t1 = time.Now()
 
 	// Tick tock next block.
 	err = lnd.NotifyHeight(601)
 	require.NoError(t, err)
 
+	// Expect timer for publishDelay (0) to be registered. Make sure
+	// sweepbatcher does not wait for recovered batches after new block
+	// arrives as well.
+	require.Equal(t, time.Duration(0), <-tickSignal)
+
+	// Advance the clock.
+	now = now.Add(time.Millisecond)
+	testClock.SetTime(now)
+
 	// Wait for tx to be published.
 	<-lnd.TxPublishChannel
-
-	// Make sure sweepbatcher does not wait for recovered batches after
-	// new block arrives as well.
-	require.Less(t, time.Since(t1), publishDelay)
 
 	// Now make the batcher quit by canceling the context.
 	cancel()
@@ -729,6 +841,10 @@ func testDelays(t *testing.T, store testStore,
 
 	// Make sure the batcher exited without an error.
 	checkBatcherError(t, runErr)
+
+	// Advance the clock by 1 second.
+	now = now.Add(time.Second)
+	testClock.SetTime(now)
 
 	// Now test for large waitingPeriod and make sure it is cancelled
 	// for an urgent sweep.
@@ -738,7 +854,7 @@ func testDelays(t *testing.T, store testStore,
 		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
 		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
 		batcherStore, sweepStore, WithWaitingPeriod(largeWaitingPeriod),
-		WithPublishDelay(publishDelay),
+		WithPublishDelay(publishDelay), WithClock(testClock),
 	)
 	ctx, cancel = context.WithCancel(context.Background())
 	wg.Add(1)
@@ -750,8 +866,38 @@ func testDelays(t *testing.T, store testStore,
 	// Wait for the batcher to be initialized.
 	<-batcher.initDone
 
+	// Expect spend notification and publication for the first batch.
+	// Expect a timer to be set: 0 (instead of publishDelay), and
+	// RegisterSpend to be called. The order is not determined, so catch
+	// these actions from two separate goroutines.
+	var wg4 sync.WaitGroup
+
+	wg4.Add(1)
+	go func() {
+		defer wg4.Done()
+
+		// Since a batch was created we check that it registered for its
+		// primary sweep's spend.
+		<-lnd.RegisterSpendChannel
+	}()
+
+	wg4.Add(1)
+	delays = nil
+	go func() {
+		defer wg4.Done()
+
+		// Expect one timer: publishDelay (0).
+		delays = append(delays, <-tickSignal)
+	}()
+
+	// Wait for RegisterSpend and for timer registration.
+	wg4.Wait()
+
+	// Expect one timer: publishDelay (0).
+	wantDelays = []time.Duration{0}
+	require.Equal(t, wantDelays, delays)
+
 	// Get spend notification and tx publication for the first batch.
-	<-lnd.RegisterSpendChannel
 	<-lnd.TxPublishChannel
 
 	// Create a sweep request which is about to expire.
@@ -787,22 +933,47 @@ func testDelays(t *testing.T, store testStore,
 	require.NoError(t, err)
 	store.AssertLoopOutStored()
 
-	t1 = time.Now()
-
 	// Deliver sweep request to batcher.
 	require.NoError(t, batcher.AddSweep(&sweepReq2))
 
-	// Expect the sweep to be added to new batch.
-	<-lnd.RegisterSpendChannel
+	// Expect the sweep to be added to new batch. Expect two timers:
+	// largeWaitingPeriod and publishDelay. RegisterSpend is called in
+	// parallel, so catch these actions from two separate goroutines.
+	var wg5 sync.WaitGroup
+
+	wg5.Add(1)
+	go func() {
+		defer wg5.Done()
+
+		// Since a batch was created we check that it registered for its
+		// primary sweep's spend.
+		<-lnd.RegisterSpendChannel
+	}()
+
+	wg5.Add(1)
+	delays = nil
+	go func() {
+		defer wg5.Done()
+
+		// Expect two timer: largeWaitingPeriod, publishDelay.
+		delays = append(delays, <-tickSignal)
+		delays = append(delays, <-tickSignal)
+	}()
+
+	// Wait for RegisterSpend and for timers' registrations.
+	wg5.Wait()
+
+	// Expect two timers: largeWaitingPeriod, publishDelay.
+	wantDelays = []time.Duration{largeWaitingPeriod, publishDelay}
+	require.Equal(t, wantDelays, delays)
+
+	// Advance the clock by publishDelay. Don't wait largeWaitingPeriod.
+	now = now.Add(publishDelay)
+	testClock.SetTime(now)
 
 	// Wait for tx to be published.
 	tx := <-lnd.TxPublishChannel
 	require.Equal(t, 1, len(tx.TxIn))
-
-	// Make sure that sweepbatcher has been waiting for at least
-	// publishDelay, but less than largeWaitingPeriod+publishDelay.
-	require.Greater(t, time.Since(t1), publishDelay)
-	require.Less(t, time.Since(t1), largeWaitingPeriod+publishDelay)
 
 	// Now make the batcher quit by canceling the context.
 	cancel()

@@ -24,6 +24,7 @@ import (
 	"github.com/lightninglabs/loop/swap"
 	sweeppkg "github.com/lightninglabs/loop/sweep"
 	"github.com/lightningnetwork/lnd/chainntnfs"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
@@ -138,6 +139,9 @@ type batchConfig struct {
 	// It only affects newly created batches, not batches loaded from DB,
 	// so publishing does happen in case of a crashloop.
 	waitingPeriod time.Duration
+
+	// clock provides methods to work with time and timers.
+	clock clock.Clock
 
 	// batchPublishDelay is the delay between receiving a new block or
 	// waiting period completion and publishing the batch transaction.
@@ -512,6 +516,11 @@ func (b *batch) Wait() {
 	<-b.finished
 }
 
+// stillWaitingMsg is the format of the message printed if the batch is about
+// to publish, but waiting period has not ended yet.
+const stillWaitingMsg = "Skipping publishing, waiting period will end at " +
+	"%v, now is %v."
+
 // Run is the batch's main event loop.
 func (b *batch) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
@@ -532,6 +541,9 @@ func (b *batch) Run(ctx context.Context) error {
 		return fmt.Errorf("both musig2 signers provided")
 	}
 
+	// Cache clock variable.
+	clock := b.cfg.clock
+
 	blockChan, blockErrChan, err :=
 		b.chainNotifier.RegisterBlockEpochNtfn(runCtx)
 	if err != nil {
@@ -551,7 +563,7 @@ func (b *batch) Run(ctx context.Context) error {
 	// skipBefore is the time before which we skip batch publishing.
 	// This is needed to facilitate better grouping of sweeps.
 	// For batches loaded from DB waitingPeriod should be 0.
-	skipBefore := time.Now().Add(b.cfg.waitingPeriod)
+	skipBefore := clock.Now().Add(b.cfg.waitingPeriod)
 
 	// waitingEndChan is a timer which fires upon waiting period end.
 	// If waitingPeriod is 0, it does not fire to prevent race with
@@ -559,7 +571,7 @@ func (b *batch) Run(ctx context.Context) error {
 	// may result in double publishing if batchPublishDelay is also 0.
 	var waitingEndChan <-chan time.Time
 	if b.cfg.waitingPeriod > 0 {
-		waitingEndChan = time.After(b.cfg.waitingPeriod)
+		waitingEndChan = clock.TickAfter(b.cfg.waitingPeriod)
 	}
 
 	// We use a timer in order to not publish new transactions at the same
@@ -572,6 +584,45 @@ func (b *batch) Run(ctx context.Context) error {
 	b.log.Infof("started, primary %x, total sweeps %v",
 		b.primarySweepID[0:6], len(b.sweeps))
 
+	// checkUrgent checks if the batch became urgent. This is determined
+	// by comparing the remaining number of blocks until timeout to the
+	// waiting period remained, given one block is 10 minutes. If the batch
+	// is found to be urgent, waitingPeriod is cancelled.
+	checkUrgent := func() {
+		timeout := b.timeout()
+		if timeout <= 0 {
+			b.log.Warnf("Method timeout() returned %v. Number of"+
+				" sweeps: %d. It may be an empty batch.",
+				timeout, len(b.sweeps))
+			return
+		}
+
+		if b.currentHeight == 0 {
+			// currentHeight is not initiated yet.
+			return
+		}
+
+		blocksToTimeout := timeout - b.currentHeight
+		const blockTime = 10 * time.Minute
+		timeBank := time.Duration(blocksToTimeout) * blockTime
+
+		// We want to have at least 2x as much time to be safe.
+		const safetyFactor = 2
+		remainingWaiting := skipBefore.Sub(clock.Now())
+		if timeBank >= safetyFactor*remainingWaiting {
+			// There is enough time, keep waiting.
+			return
+		}
+
+		// Reset waitingPeriod by setting skipBefore to now. It will be
+		// published when timerChan fires (in batchPublishDelay seconds).
+		skipBefore = clock.Now()
+
+		b.log.Debugf("cancelling waiting for urgent sweep "+
+			"(timeBank is %v, remainingWaiting is %v)",
+			timeBank, remainingWaiting)
+	}
+
 	for {
 		select {
 		case <-b.callEnter:
@@ -583,38 +634,8 @@ func (b *batch) Run(ctx context.Context) error {
 
 			// Set the timer to publish the batch transaction after
 			// the configured delay.
-			timerChan = time.After(b.cfg.batchPublishDelay)
+			timerChan = clock.TickAfter(b.cfg.batchPublishDelay)
 			b.currentHeight = height
-
-			// Check if the batch became urgent.
-			timeout := b.timeout()
-			if timeout <= 0 {
-				b.log.Warnf("Method timeout() returned %v. "+
-					"Number of sweeps: %d. It may be an"+
-					" empty batch.", timeout, len(b.sweeps))
-				continue
-			}
-
-			blocksToTimeout := timeout - height
-			const blockTime = 10 * time.Minute
-			timeBank := time.Duration(blocksToTimeout) * blockTime
-
-			// We want to have at least 2x as much time to be safe.
-			const safetyFactor = 2
-			remainingWaiting := time.Until(skipBefore)
-			if timeBank >= safetyFactor*remainingWaiting {
-				// There is enough time, keep waiting.
-				continue
-			}
-
-			// Reset waitingPeriod by setting skipBefore to now.
-			// It will be published when timerChan fires (in
-			// batchPublishDelay seconds).
-			skipBefore = time.Now()
-
-			b.log.Debugf("cancelling waiting for urgent sweep "+
-				"(timeBank is %v, remainingWaiting is %v)",
-				timeBank, remainingWaiting)
 
 		case <-waitingEndChan:
 			b.log.Debugf("waiting period of duration %v has ended",
@@ -622,18 +643,31 @@ func (b *batch) Run(ctx context.Context) error {
 
 			// Set the timer to publish the batch transaction after
 			// the configured delay.
-			timerChan = time.After(b.cfg.batchPublishDelay)
+			timerChan = clock.TickAfter(b.cfg.batchPublishDelay)
 
 		case <-timerChan:
-			// Check that batch is still open and that the waiting
-			// period has ended. We have also batchPublishDelay on
-			// top of waitingPeriod, so if waitingEndChan has just
-			// fired, this time check must pass.
-			if b.state == Open && !skipBefore.After(time.Now()) {
-				err := b.publish(ctx)
-				if err != nil {
-					return err
-				}
+			// Check that batch is still open.
+			if b.state != Open {
+				b.log.Debugf("Skipping publishing, because the"+
+					"batch is not open (%v).", b.state)
+				continue
+			}
+
+			// If the batch became urgent, skipBefore is set to now.
+			checkUrgent()
+
+			// Check that the waiting period has ended. We have also
+			// batchPublishDelay on top of waitingPeriod, so if
+			// waitingEndChan has just fired, this check must pass.
+			now := clock.Now()
+			if skipBefore.After(now) {
+				b.log.Debugf(stillWaitingMsg, skipBefore, now)
+				continue
+			}
+
+			err := b.publish(ctx)
+			if err != nil {
+				return err
 			}
 
 		case spend := <-b.spendChan:
