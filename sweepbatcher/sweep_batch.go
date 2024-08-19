@@ -1330,9 +1330,17 @@ func (b *batch) publishMixedBatch(ctx context.Context) (btcutil.Amount, error,
 
 	// Now sign the remaining sweeps' inputs non-cooperatively.
 	// For that, first collect sign descriptors for the signatures.
+	// Also collect prevOuts for all inputs.
 	signDescs := make([]*lndclient.SignDescriptor, 0, nonCoopInputs)
-	prevOutsList := make([]*wire.TxOut, 0, nonCoopInputs)
+	prevOutsList := make([]*wire.TxOut, 0, len(sweeps))
 	for i, sweep := range sweeps {
+		// Create and store the previous outpoint for this sweep.
+		prevOut := &wire.TxOut{
+			Value:    int64(sweep.value),
+			PkScript: sweep.htlc.PkScript,
+		}
+		prevOutsList = append(prevOutsList, prevOut)
+
 		// Skip cooperative sweeps.
 		if !sweep.nonCoopHint && !sweep.coopFailed {
 			continue
@@ -1345,13 +1353,6 @@ func (b *batch) publishMixedBatch(ctx context.Context) (btcutil.Amount, error,
 			return 0, fmt.Errorf("btcec.ParsePubKey failed: %w",
 				err), false
 		}
-
-		// Create and store the previous outpoint for this sweep.
-		prevOut := &wire.TxOut{
-			Value:    int64(sweep.value),
-			PkScript: sweep.htlc.PkScript,
-		}
-		prevOutsList = append(prevOutsList, prevOut)
 
 		// Create and store the sign descriptor for this sweep.
 		signDesc := lndclient.SignDescriptor{
@@ -1377,10 +1378,10 @@ func (b *batch) publishMixedBatch(ctx context.Context) (btcutil.Amount, error,
 		return 0, fmt.Errorf("unexpected size of signDescs: %d != %d",
 			len(signDescs), nonCoopInputs), false
 	}
-	if len(prevOutsList) != nonCoopInputs {
+	if len(prevOutsList) != len(sweeps) {
 		// This must not happen by construction.
 		return 0, fmt.Errorf("unexpected size of prevOutsList: "+
-			"%d != %d", len(prevOutsList), nonCoopInputs), false
+			"%d != %d", len(prevOutsList), len(sweeps)), false
 	}
 
 	var rawSigs [][]byte
