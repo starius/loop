@@ -214,6 +214,6 @@ toolchain go1.22.7
 
 replace (
 	github.com/lightninglabs/aperture => github.com/ellemouton/aperture v0.0.0-20241027051805-8cd28634e3bc
-	github.com/lightninglabs/lndclient => github.com/ellemouton/lndclient v1.0.1-0.20241023065244-170dbf90b579
-	github.com/lightningnetwork/lnd => github.com/ellemouton/lnd v0.8.0-beta-rc3.0.20241026121832-a03d5fcb9e11
+	github.com/lightninglabs/lndclient => github.com/starius/lndclient v0.0.0-20241023065244-170dbf90b579
+	github.com/lightningnetwork/lnd => github.com/starius/lnd v0.18.3-beta.gm2.0.20241029153602-0c231f9d1545
 )
