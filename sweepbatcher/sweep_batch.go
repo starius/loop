@@ -172,6 +172,11 @@ type batchConfig struct {
 	// Note that musig2SignSweep must be nil in this case, however signer
 	// client must still be provided, as it is used for non-coop spendings.
 	customMuSig2Signer SignMuSig2
+
+	// customTxSigner is a custom signer of the whole transaction. It is
+	// used in use cases with pre-signed transactions. See SignTx for all
+	// the rules customTxSigner must comply with.
+	customTxSigner SignTx
 }
 
 // rbfCache stores data related to our last fee bump.
@@ -811,7 +816,12 @@ func (b *batch) publish(ctx context.Context) error {
 		b.publishErrorHandler(err, errMsg, b.log)
 	}
 
-	fee, err, signSuccess = b.publishMixedBatch(ctx)
+	if b.cfg.customTxSigner != nil {
+		fee, err, signSuccess = b.publishCustomSigned(ctx)
+	} else {
+		fee, err, signSuccess = b.publishMixedBatch(ctx)
+	}
+
 	if err != nil {
 		if signSuccess {
 			logPublishError("publish error", err)
@@ -1233,6 +1243,238 @@ func (b *batch) publishMixedBatch(ctx context.Context) (btcutil.Amount, error,
 	b.batchPkScript = tx.TxOut[0].PkScript
 
 	return fee, nil, true
+}
+
+// publishCustomSigned creates sweep transaction using a custom transaction
+// signer and publishes it. It may use CPFP if custom signer returned a
+// pre-signed transaction with insufficient fee. It returns fee of the first tx,
+// not including CPFP's fee, an error (if signing and/or publishing failed) and
+// a boolean flag indicating signing success. This mode is incompatible with
+// external address, because it may use CPFP and is designed for batch sweeps.
+func (b *batch) publishCustomSigned(ctx context.Context) (btcutil.Amount, error,
+	bool) {
+
+	// Sanity check, there should be at least 1 sweep in this batch.
+	if len(b.sweeps) == 0 {
+		return 0, fmt.Errorf("no sweeps in batch"), false
+	}
+
+	// Make sure that no external address is used.
+	for _, sweep := range b.sweeps {
+		if sweep.isExternalAddr {
+			return 0, fmt.Errorf("external address was used with " +
+				"a custom transaction signer"), false
+		}
+	}
+
+	// Cache the destination address.
+	address, err := b.getBatchDestAddr(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to find destination address: %w",
+			err), false
+	}
+
+	// Cache current height and desired feerate of the batch.
+	currentHeight := b.currentHeight
+	feeRate := b.rbfCache.FeeRate
+
+	// Append this sweep to an array of sweeps. This is needed to keep the
+	// order of sweeps stored, as iterating the sweeps map does not
+	// guarantee same order.
+	sweeps := make([]sweep, 0, len(b.sweeps))
+	for _, sweep := range b.sweeps {
+		sweeps = append(sweeps, sweep)
+	}
+
+	// Construct unsigned batch transaction.
+	tx, weight, feeForWeight, fee, err := constructUnsignedTx(
+		sweeps, address, currentHeight, feeRate,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to construct tx: %w", err),
+			false
+	}
+
+	// Adjust feeRate, because it may have been clamped.
+	feeRate = chainfee.NewSatPerKWeight(fee, weight)
+
+	// Calculate total input amount.
+	batchAmt := btcutil.Amount(0)
+	for _, sweep := range sweeps {
+		batchAmt += sweep.value
+	}
+
+	// Determine the current minimum relay fee based on our chain backend.
+	minRelayFee, err := b.wallet.MinRelayFee(ctx)
+
+	// Get a signed transaction. It may be either new transaction or a
+	// pre-signed one.
+	signedTx, err := b.cfg.customTxSigner(ctx, tx, batchAmt, minRelayFee)
+	if err != nil {
+		return 0, fmt.Errorf("failed to sign tx: %w", err),
+			false
+	}
+
+	// Run sanity checks to make sure customTxSigner complied with all the
+	// invariants.
+	err = checkSignedTx(tx, signedTx, batchAmt, minRelayFee)
+	if err != nil {
+		return 0, fmt.Errorf("signed tx doesn't correspond the "+
+			"unsigned tx: %w", err), false
+	}
+	tx = signedTx
+
+	// Determine if CPFP is needed and its feerate.
+	needsCPFP, cpfpFeeRate, err := isCPFPNeeded(tx, batchAmt, feeRate)
+	if err != nil {
+		return 0, fmt.Errorf("failed to determine if CPFP is "+
+			"needed: %w", err), false
+	}
+
+	txHash := tx.TxHash()
+	b.log.Infof("attempting to publish custom signed tx=%v, feerate=%v, "+
+		"weight=%v, feeForWeight=%v, fee=%v, sweeps=%d, destAddr=%s, "+
+		"needsCPFP=%v, cpfpFeeRate=%v", txHash, feeRate, weight,
+		feeForWeight, fee, len(tx.TxIn), address, needsCPFP,
+		cpfpFeeRate)
+	b.debugLogTx("serialized batch", tx)
+
+	// Make sure tx weight matches the expected value.
+	realWeight := lntypes.WeightUnit(
+		blockchain.GetTransactionWeight(btcutil.NewTx(tx)),
+	)
+	if realWeight != weight {
+		b.log.Warnf("actual weight of tx %v is %v, estimated as %d",
+			txHash, realWeight, weight)
+	}
+
+	// Publish the transaction. If it fails, we don't return immediately,
+	// because we may still need a CPFP and it can be done against a
+	// previously published transaction.
+	publishErr1 := b.wallet.PublishTransaction(
+		ctx, tx, b.cfg.txLabeler(b.id),
+	)
+	if publishErr1 == nil {
+		// Store the batch transaction's txid and pkScript, to use in
+		// CPFP and for monitoring purposes.
+		b.batchTxid = &txHash
+		b.batchPkScript = tx.TxOut[0].PkScript
+
+		if err := b.persist(ctx); err != nil {
+			return 0, fmt.Errorf("failed to persist: %w", err), true
+		}
+	}
+
+	// Do CPFP if needed.
+	if needsCPFP {
+		if b.batchTxid == nil {
+			return 0, fmt.Errorf("need an CPFP, but there is no " +
+				"published tx known for this batch"), true
+		}
+
+		outpoint := wire.OutPoint{
+			Hash:  txHash,
+			Index: 0,
+		}
+
+		// TODO: set immediate=true.
+		// See https://github.com/lightninglabs/lndclient/pull/206
+		err := b.wallet.BumpFee(ctx, outpoint, cpfpFeeRate)
+		if err != nil {
+			return fee, fmt.Errorf("CPFP failed: %w", err), true
+		}
+
+		// TODO: capture and log/analyze the CPFP tx. It can be done
+		// by looking into ListUnspent.
+
+		// NOTE. LND must be at least 0.18.5, not 0.18.4.
+		// https://github.com/lightningnetwork/lnd/pull/9470
+
+		// TODO: disable auto re-bumping of CPFP. We do it ourselves.
+
+		// TODO: use effective fee rate in FeeBump:
+		// https://github.com/lightningnetwork/lnd/issues/5432
+	}
+
+	return fee, publishErr1, true
+}
+
+// checkSignedTx makes sure that signedTx matches the unsignedTx. It checks
+// according to criteria specified in the description of SignTx.
+func checkSignedTx(unsignedTx, signedTx *wire.MsgTx, inputAmt btcutil.Amount,
+	minRelayFee chainfee.SatPerKWeight) error {
+
+	// Make sure the set of inputs is the same.
+	unsignedMap := make(map[wire.OutPoint]uint32, len(unsignedTx.TxIn))
+	for _, txIn := range unsignedTx.TxIn {
+		unsignedMap[txIn.PreviousOutPoint] = txIn.Sequence
+	}
+	for _, txIn := range signedTx.TxIn {
+		seq, has := unsignedMap[txIn.PreviousOutPoint]
+		if !has {
+			return fmt.Errorf("input %s is new in signed tx",
+				txIn.PreviousOutPoint)
+		}
+		if seq != txIn.Sequence {
+			return fmt.Errorf("sequence mismatch in input %s: "+
+				"%d in unsigned, %d in signed",
+				txIn.PreviousOutPoint, seq, txIn.Sequence)
+		}
+		delete(unsignedMap, txIn.PreviousOutPoint)
+	}
+	for outpoint := range unsignedMap {
+		return fmt.Errorf("input %s is missing in signed tx", outpoint)
+	}
+
+	// Compare outputs.
+	if len(unsignedTx.TxOut) != 1 {
+		return fmt.Errorf("unsigned tx has %d outputs, want 1",
+			len(unsignedTx.TxOut))
+	}
+	if len(signedTx.TxOut) != 1 {
+		return fmt.Errorf("the signed tx has %d outputs, want 1",
+			len(signedTx.TxOut))
+	}
+	unsignedOut := unsignedTx.TxOut[0]
+	signedOut := signedTx.TxOut[0]
+	if !bytes.Equal(unsignedOut.PkScript, signedOut.PkScript) {
+		return fmt.Errorf("mismatch of output pkScript: %v, %v",
+			unsignedOut.PkScript, signedOut.PkScript)
+	}
+
+	// Find the feerate of signedTx.
+	fee := inputAmt - btcutil.Amount(signedOut.Value)
+	weight := lntypes.WeightUnit(
+		blockchain.GetTransactionWeight(btcutil.NewTx(signedTx)),
+	)
+	feeRate := chainfee.NewSatPerKWeight(fee, weight)
+	if feeRate < minRelayFee {
+		return fmt.Errorf("feerate (%v) of signed tx is lower than "+
+			"minRelayFee (%v)", feeRate, minRelayFee)
+	}
+
+	// Check LockTime.
+	if signedTx.LockTime > unsignedTx.LockTime {
+		return fmt.Errorf("locktime (%d) of signed tx is higher than "+
+			"locktime of unsigned tx (%d)", signedTx.LockTime,
+			unsignedTx.LockTime)
+	}
+
+	// Check Version.
+	if signedTx.Version != unsignedTx.Version {
+		return fmt.Errorf("version (%d) of signed tx is not equal to "+
+			"version of unsigned tx (%d)", signedTx.Version,
+			unsignedTx.Version)
+	}
+
+	return nil
+}
+
+func isCPFPNeeded(signedTx *wire.MsgTx, inputAmt btcutil.Amount,
+	minRelayFee chainfee.SatPerKWeight) (bool, chainfee.SatPerKWeight,
+	error) {
+
+	return false, 0, fmt.Errorf("TODO")
 }
 
 func (b *batch) debugLogTx(msg string, tx *wire.MsgTx) {

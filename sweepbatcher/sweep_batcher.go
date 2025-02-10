@@ -153,6 +153,17 @@ type SignMuSig2 func(ctx context.Context, muSig2Version input.MuSig2Version,
 	swapHash lntypes.Hash, rootHash chainhash.Hash, sigHash [32]byte,
 ) ([]byte, error)
 
+// SignTx signs an unsigned transaction or returns a pre-signed transaction.
+// It must satisfy the following invariants:
+//   - the set of inputs is the same, though the order may change;
+//   - the output is the same, but its amount may be different;
+//   - feerate is higher or equal to minRelayFee;
+//   - LockTime may be decreased;
+//   - transaction version must be the same;
+//   - Sequence numbers in the inputs must be preserved.
+type SignTx func(ctx context.Context, tx *wire.MsgTx, inputAmt btcutil.Amount,
+	minRelayFee chainfee.SatPerKWeight) (*wire.MsgTx, error)
+
 // VerifySchnorrSig is a function that can be used to verify a schnorr
 // signature.
 type VerifySchnorrSig func(pubKey *btcec.PublicKey, hash, sig []byte) error
