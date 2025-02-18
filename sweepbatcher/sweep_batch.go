@@ -177,6 +177,9 @@ type batchConfig struct {
 	// used in use cases with pre-signed transactions. See SignTx for all
 	// the rules customTxSigner must comply with.
 	customTxSigner SignTx
+
+	// loadTx loads tx by txid. It must be able to load from mempool.
+	loadTx LoadTx
 }
 
 // rbfCache stores data related to our last fee bump.
@@ -1259,6 +1262,11 @@ func (b *batch) publishCustomSigned(ctx context.Context) (btcutil.Amount, error,
 		return 0, fmt.Errorf("no sweeps in batch"), false
 	}
 
+	// Make sure we have loadTx handler set.
+	if b.cfg.loadTx == nil {
+		return 0, fmt.Errorf("loadTx handler is not installed"), false
+	}
+
 	// Make sure that no external address is used.
 	for _, sweep := range b.sweeps {
 		if sweep.isExternalAddr {
@@ -1324,19 +1332,11 @@ func (b *batch) publishCustomSigned(ctx context.Context) (btcutil.Amount, error,
 	}
 	tx = signedTx
 
-	// Determine if CPFP is needed and its feerate.
-	needsCPFP, cpfpFeeRate, err := isCPFPNeeded(tx, batchAmt, feeRate)
-	if err != nil {
-		return 0, fmt.Errorf("failed to determine if CPFP is "+
-			"needed: %w", err), false
-	}
-
 	txHash := tx.TxHash()
 	b.log.Infof("attempting to publish custom signed tx=%v, feerate=%v, "+
-		"weight=%v, feeForWeight=%v, fee=%v, sweeps=%d, destAddr=%s, "+
-		"needsCPFP=%v, cpfpFeeRate=%v", txHash, feeRate, weight,
-		feeForWeight, fee, len(tx.TxIn), address, needsCPFP,
-		cpfpFeeRate)
+		"weight=%v, feeForWeight=%v, fee=%v, sweeps=%d, destAddr=%s",
+		txHash, feeRate, weight, feeForWeight, fee, len(tx.TxIn),
+		address)
 	b.debugLogTx("serialized batch", tx)
 
 	// Make sure tx weight matches the expected value.
@@ -1365,35 +1365,80 @@ func (b *batch) publishCustomSigned(ctx context.Context) (btcutil.Amount, error,
 		}
 	}
 
-	// Do CPFP if needed.
-	if needsCPFP {
-		if b.batchTxid == nil {
-			return 0, fmt.Errorf("need an CPFP, but there is no " +
-				"published tx known for this batch"), true
-		}
+	// Try to do CPFP.
+	if b.batchTxid == nil {
+		return 0, fmt.Errorf("need an CPFP, but there is no " +
+			"published tx known for this batch"), true
+	}
 
-		outpoint := wire.OutPoint{
-			Hash:  txHash,
-			Index: 0,
-		}
+	// Load last successfully sent batch transaction to get its info
+	// for CPFP.
+	parentTx, err := b.cfg.loadTx(ctx, *b.batchTxid)
+	if err != nil {
+		return 0, fmt.Errorf("failed to load batch tx %v: %w",
+			*b.batchTxid, err), true
+	}
+	// If previously published tx has fewer inputs than the current state
+	// of the batch, skip CPFP, since it would bump an outdated state.
+	if len(parentTx.TxIn) != len(tx.TxIn) {
+		b.log.Infof("Skip publishing CPFP, because batch tx in mempool"+
+			"has %d inputs, while the batch has now %d inputs",
+			len(parentTx.TxIn), len(tx.TxIn))
 
-		// TODO: set immediate=true.
-		// See https://github.com/lightninglabs/lndclient/pull/206
-		err := b.wallet.BumpFee(ctx, outpoint, cpfpFeeRate)
-		if err != nil {
-			return fee, fmt.Errorf("CPFP failed: %w", err), true
-		}
+		return fee, publishErr1, true
+	}
+	parentWeight := lntypes.WeightUnit(
+		blockchain.GetTransactionWeight(btcutil.NewTx(parentTx)),
+	)
+	if len(parentTx.TxOut) != 1 {
+		return 0, fmt.Errorf("published batch tx has %d outputs, "+
+			"must have 1", len(parentTx.TxOut)), true
+	}
+	parentOutput := btcutil.Amount(parentTx.TxOut[0].Value)
+	parentFee := parentOutput - batchAmt
 
-		// TODO: capture and log/analyze the CPFP tx. It can be done
-		// by looking into ListUnspent.
+	// Determine if CPFP is needed and its feerate.
+	needsCPFP, err := isCPFPNeeded(parentTx, batchAmt, feeRate)
+	if err != nil {
+		return 0, fmt.Errorf("failed to determine if CPFP is "+
+			"needed: %w", err), false
+	}
 
-		// NOTE. LND must be at least 0.18.5, not 0.18.4.
-		// https://github.com/lightningnetwork/lnd/pull/9470
+	// If CPFP is not needed, we are done now.
+	if !needsCPFP {
+		return fee, publishErr1, true
+	}
 
-		// TODO: disable auto re-bumping of CPFP. We do it ourselves.
+	// Create and sign CPFP.
+	childTx, childFeeRate, err := makeUnsignedCPFP(
+		*b.batchTxid, parentOutput, parentWeight, parentFee,
+		minRelayFee, feeRate, address, currentHeight,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to make CPFP tx: %w", err),
+			true
+	}
 
-		// TODO: use effective fee rate in FeeBump:
-		// https://github.com/lightningnetwork/lnd/issues/5432
+	childTx, err = b.signChildTx(ctx, childTx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to sign CPFP tx: %w", err),
+			true
+	}
+
+	childTxHash := childTx.TxHash()
+	parentFeeRate := chainfee.NewSatPerKWeight(parentFee, parentWeight)
+	b.log.Infof("attempting to publish child tx %v to CPFP parent tx %v, "+
+		"effectiveFeeRate=%v, parentFeeRate=%v, childFeeRate=%v",
+		childTxHash, *b.batchTxid, feeRate, parentFeeRate,
+		childFeeRate)
+	b.debugLogTx("serialized child tx", childTx)
+
+	// Publish child transaction.
+	publishErr2 := b.wallet.PublishTransaction(
+		ctx, childTx, "cpfp-for-"+b.cfg.txLabeler(b.id),
+	)
+	if publishErr2 != nil {
+		return fee, publishErr2, true
 	}
 
 	return fee, publishErr1, true
@@ -1470,11 +1515,122 @@ func checkSignedTx(unsignedTx, signedTx *wire.MsgTx, inputAmt btcutil.Amount,
 	return nil
 }
 
-func isCPFPNeeded(signedTx *wire.MsgTx, inputAmt btcutil.Amount,
-	minRelayFee chainfee.SatPerKWeight) (bool, chainfee.SatPerKWeight,
-	error) {
+// feeRateThresholdPPM is the ratio of accepted underpayment of fee for which
+// no CPFP is used to adjust the effective fee rate. If the underpayment is
+// higher, then CPFP is enabled. It is measured in PPM, current level is 2%.
+const feeRateThresholdPPM = 2_0000
 
-	return false, 0, fmt.Errorf("TODO")
+// isCPFPNeeded returns if CPFP is needed to make the effective fee rate close
+// to the desired feeRate. The threshold is feeRateThresholdPPM.
+func isCPFPNeeded(signedTx *wire.MsgTx, inputAmt btcutil.Amount,
+	feeRate chainfee.SatPerKWeight) (bool, error) {
+
+	// Sanity checks.
+	if len(signedTx.TxOut) != 1 {
+		return false, fmt.Errorf("batch tx must have one output, "+
+			"but it has %d", len(signedTx.TxOut))
+	}
+
+	// Make sure that the transaction is signed.
+	for _, txIn := range signedTx.TxIn {
+		if len(txIn.Witness) == 0 {
+			return false, fmt.Errorf("the tx must be signed")
+		}
+	}
+
+	// Calculate fee rate of the transaction.
+	weight := lntypes.WeightUnit(
+		blockchain.GetTransactionWeight(btcutil.NewTx(signedTx)),
+	)
+	fee := inputAmt - btcutil.Amount(signedTx.TxOut[0].Value)
+	if fee < 0 {
+		return false, fmt.Errorf("the tx has negative fee %v", fee)
+	}
+	parentFeeRate := chainfee.NewSatPerKWeight(fee, weight)
+
+	// Check of the observed_feerate < desired_feerate - threshold.
+	threshold := feeRate * feeRateThresholdPPM / 1_000_000
+	cpfpNeeded := parentFeeRate < feeRate-threshold
+
+	return cpfpNeeded, nil
+}
+
+// maxChildFeeSharePPM specifies max share (in ppm) of total funds that can be
+// burn in the child transaction in CPFP. Currently it is set to 20%.
+const maxChildFeeSharePPM = 20_0000
+
+// makeUnsignedCPFP constructs unsigned child tx for CPFP to achieve desired
+// effective fee rate. It also returns fee rate of the constructed child tx.
+// The transaction spends the UTXO to the same address. Supports P2WKH, P2TR.
+func makeUnsignedCPFP(parentTxid chainhash.Hash, parentOutput btcutil.Amount,
+	parentWeight lntypes.WeightUnit, parentFee btcutil.Amount, minRelayFee,
+	effectiveFeeRate chainfee.SatPerKWeight, address btcutil.Address,
+	currentHeight int32) (*wire.MsgTx, chainfee.SatPerKWeight, error) {
+
+	// Estimate the weight of the child tx.
+	var estimator input.TxWeightEstimator
+	switch address.(type) {
+	case *btcutil.AddressWitnessPubKeyHash:
+		estimator.AddP2WKHInput()
+		estimator.AddP2WKHOutput()
+
+	case *btcutil.AddressTaproot:
+		estimator.AddTaprootKeySpendInput(txscript.SigHashDefault)
+		estimator.AddP2TROutput()
+
+	default:
+		return nil, 0, fmt.Errorf("unknown address type %T", address)
+	}
+	childWeight := estimator.Weight()
+
+	// Estimate the fee of the child tx.
+	totalWeight := parentWeight + childWeight
+	totalFee := effectiveFeeRate.FeeForWeight(totalWeight)
+	childFee := totalFee - parentFee
+	childFeeRate := chainfee.NewSatPerKWeight(childFee, childWeight)
+	if childFeeRate < minRelayFee {
+		childFeeRate = minRelayFee
+		childFee = childFeeRate.FeeForWeight(childWeight)
+	}
+	if childFeeRate < effectiveFeeRate {
+		return nil, 0, fmt.Errorf("got child fee rate %v lower than "+
+			"effective fee rate %v", childFeeRate, effectiveFeeRate)
+	}
+	if childFee > parentOutput*maxChildFeeSharePPM/1_000_000 {
+		return nil, 0, fmt.Errorf("child fee %v is higher than %d%% "+
+			"of total funds %v", childFee,
+			maxChildFeeSharePPM*100/1_000_000, parentOutput)
+	}
+
+	// Construct child tx.
+	childTx := &wire.MsgTx{
+		Version:  2,
+		LockTime: uint32(currentHeight),
+	}
+	childTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{
+			Hash:  parentTxid,
+			Index: 0,
+		},
+	})
+	pkScript, err := txscript.PayToAddrScript(address)
+	if err != nil {
+		return nil, 0, fmt.Errorf("txscript.PayToAddrScript "+
+			"failed: %w", err)
+	}
+	childTx.AddTxOut(&wire.TxOut{
+		PkScript: pkScript,
+		Value:    int64(parentOutput - childFee),
+	})
+
+	return childTx, childFeeRate, nil
+}
+
+// signChildTx signs child CPFP transaction using LND client.
+func (b *batch) signChildTx(ctx context.Context,
+	unsignedTx *wire.MsgTx) (*wire.MsgTx, error) {
+
+	return nil, fmt.Errorf("TODO")
 }
 
 func (b *batch) debugLogTx(msg string, tx *wire.MsgTx) {

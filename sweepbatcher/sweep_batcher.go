@@ -164,6 +164,9 @@ type SignMuSig2 func(ctx context.Context, muSig2Version input.MuSig2Version,
 type SignTx func(ctx context.Context, tx *wire.MsgTx, inputAmt btcutil.Amount,
 	minRelayFee chainfee.SatPerKWeight) (*wire.MsgTx, error)
 
+// LoadTx loads tx by txid. It must be able to load from mempool.
+type LoadTx func(ctx context.Context, txid chainhash.Hash) (*wire.MsgTx, error)
+
 // VerifySchnorrSig is a function that can be used to verify a schnorr
 // signature.
 type VerifySchnorrSig func(pubKey *btcec.PublicKey, hash, sig []byte) error

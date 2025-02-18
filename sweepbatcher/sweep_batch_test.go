@@ -33,8 +33,8 @@ func TestConstructUnsignedTx(t *testing.T) {
 	batchPkScript, err := txscript.PayToAddrScript(destAddr)
 	require.NoError(t, err)
 
-	p2trAddr := "bcrt1qwgzsmag0579twr4d8hgfvarqxn27mdmdgfh" +
-		"7wc2hdlupsfqtxwyq5zltqn"
+	p2trAddr := "bcrt1pa38tp2hgjevqv3jcsxeu7v72n0s5a3ck8q2u8r" +
+		"k6mm67dv7uk26qq8je7e"
 	p2trAddress, err := btcutil.DecodeAddress(p2trAddr, nil)
 	require.NoError(t, err)
 	p2trPkScript, err := txscript.PayToAddrScript(p2trAddress)
@@ -882,6 +882,463 @@ func TestCheckSignedTx(t *testing.T) {
 				require.ErrorContains(t, err, tc.wantErr)
 			} else {
 				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestIsCPFPNeeded tests that function isCPFPNeeded works correctly, satisfying
+// feeRateThresholdPPM.
+func TestIsCPFPNeeded(t *testing.T) {
+	// Prepare some data used in test cases.
+	op1 := wire.OutPoint{
+		Hash:  chainhash.Hash{1, 1, 1},
+		Index: 1,
+	}
+	op2 := wire.OutPoint{
+		Hash:  chainhash.Hash{2, 2, 2},
+		Index: 2,
+	}
+
+	batchPkScript, err := txscript.PayToAddrScript(destAddr)
+	require.NoError(t, err)
+
+	witness := wire.TxWitness{
+		make([]byte, 64),
+	}
+
+	cases := []struct {
+		name          string
+		signedTx      *wire.MsgTx
+		inputAmt      btcutil.Amount
+		feeRate       chainfee.SatPerKWeight
+		wantErr       string
+		wantNeedsCPFP bool
+	}{
+		{
+			name: "fee rate matches exacly",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2999374,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt:      3_000_000,
+			feeRate:       1000,
+			wantErr:       "",
+			wantNeedsCPFP: false,
+		},
+		{
+			name: "fee rate higher than needed",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2999374,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt:      3_000_000,
+			feeRate:       900,
+			wantErr:       "",
+			wantNeedsCPFP: false,
+		},
+		{
+			name: "fee rate slightly lower than needed",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2999374,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt:      3_000_000,
+			feeRate:       1020,
+			wantErr:       "",
+			wantNeedsCPFP: false,
+		},
+		{
+			name: "fee rate significantly lower than needed",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2999374,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt:      3_000_000,
+			feeRate:       1100,
+			wantErr:       "",
+			wantNeedsCPFP: true,
+		},
+		{
+			name: "error: tx has negative fee",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    3_001_000,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt: 3_000_000,
+			feeRate:  1000,
+			wantErr:  "negative fee",
+		},
+		{
+			name: "error: tx has multiple outputs",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+						Witness:          witness,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+						Witness:          witness,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    1_000_000,
+						PkScript: batchPkScript,
+					},
+					{
+						Value:    2_000_000,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt: 3_000_000,
+			feeRate:  1000,
+			wantErr:  "must have one output",
+		},
+		{
+			name: "error: unsigned tx",
+			signedTx: &wire.MsgTx{
+				Version: 2,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op1,
+						Sequence:         1,
+					},
+					{
+						PreviousOutPoint: op2,
+						Sequence:         2,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2999374,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			inputAmt: 3_000_000,
+			feeRate:  1000,
+			wantErr:  "the tx must be signed",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			needsCPFP, err := isCPFPNeeded(
+				tc.signedTx, tc.inputAmt, tc.feeRate,
+			)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.wantNeedsCPFP, needsCPFP)
+			}
+		})
+	}
+}
+
+// TestMakeUnsignedCPFP tests that function makeUnsignedCPFP works correctly,
+// satisfying maxChildFeeSharePPM and making sure that child fee rate is higher
+// than effective fee rate and of minRelayFee.
+func TestMakeUnsignedCPFP(t *testing.T) {
+	// Prepare some data used in test cases.
+	batchPkScript, err := txscript.PayToAddrScript(destAddr)
+	require.NoError(t, err)
+
+	p2trAddr := "bcrt1pa38tp2hgjevqv3jcsxeu7v72n0s5a3ck8q2u8r" +
+		"k6mm67dv7uk26qq8je7e"
+	p2trAddress, err := btcutil.DecodeAddress(p2trAddr, nil)
+	require.NoError(t, err)
+	p2trPkScript, err := txscript.PayToAddrScript(p2trAddress)
+	require.NoError(t, err)
+
+	serializedPubKey := []byte{
+		0x02, 0x19, 0x2d, 0x74, 0xd0, 0xcb, 0x94, 0x34, 0x4c, 0x95,
+		0x69, 0xc2, 0xe7, 0x79, 0x01, 0x57, 0x3d, 0x8d, 0x79, 0x03,
+		0xc3, 0xeb, 0xec, 0x3a, 0x95, 0x77, 0x24, 0x89, 0x5d, 0xca,
+		0x52, 0xc6, 0xb4}
+	p2pkAddress, err := btcutil.NewAddressPubKey(
+		serializedPubKey, &chaincfg.RegressionNetParams,
+	)
+	require.NoError(t, err)
+
+	batchTxid := chainhash.Hash{5, 5, 5}
+
+	op := wire.OutPoint{
+		Hash:  batchTxid,
+		Index: 0,
+	}
+
+	cases := []struct {
+		name              string
+		parentTxid        chainhash.Hash
+		parentOutput      btcutil.Amount
+		parentWeight      lntypes.WeightUnit
+		parentFee         btcutil.Amount
+		minRelayFee       chainfee.SatPerKWeight
+		effectiveFeeRate  chainfee.SatPerKWeight
+		address           btcutil.Address
+		currentHeight     int32
+		wantErr           string
+		wantUnsignedChild *wire.MsgTx
+		wantChildFeeRate  chainfee.SatPerKWeight
+	}{
+		{
+			name:             "normal child creation",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 2000,
+			address:          p2trAddress,
+			currentHeight:    800_000,
+			wantUnsignedChild: &wire.MsgTx{
+				Version:  2,
+				LockTime: 800_000,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2997860,
+						PkScript: p2trPkScript,
+					},
+				},
+			},
+			wantChildFeeRate: 3410,
+		},
+		{
+			name:             "p2wpkh address",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 2000,
+			address:          destAddr,
+			currentHeight:    800_000,
+			wantUnsignedChild: &wire.MsgTx{
+				Version:  2,
+				LockTime: 800_000,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2997870,
+						PkScript: batchPkScript,
+					},
+				},
+			},
+			wantChildFeeRate: 3426,
+		},
+		{
+			name:             "error: p2pk address",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 2000,
+			address:          p2pkAddress,
+			currentHeight:    800_000,
+			wantErr:          "unknown address type",
+		},
+		{
+			name:             "effective feerate as in parent",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 1000,
+			address:          p2trAddress,
+			currentHeight:    800_000,
+			wantUnsignedChild: &wire.MsgTx{
+				Version:  2,
+				LockTime: 800_000,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2998930,
+						PkScript: p2trPkScript,
+					},
+				},
+			},
+			wantChildFeeRate: 1000,
+		},
+		{
+			name:             "effective feerate below parent",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 500,
+			address:          p2trAddress,
+			currentHeight:    800_000,
+			wantErr:          "lower than effective fee rate",
+		},
+		{
+			name:             "high minRelayFee",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      10_000,
+			effectiveFeeRate: 2000,
+			address:          p2trAddress,
+			currentHeight:    800_000,
+			wantUnsignedChild: &wire.MsgTx{
+				Version:  2,
+				LockTime: 800_000,
+				TxIn: []*wire.TxIn{
+					{
+						PreviousOutPoint: op,
+					},
+				},
+				TxOut: []*wire.TxOut{
+					{
+						Value:    2994934,
+						PkScript: p2trPkScript,
+					},
+				},
+			},
+			wantChildFeeRate: 10_000,
+		},
+		{
+			name:             "child fee too high",
+			parentTxid:       batchTxid,
+			parentOutput:     2999374,
+			parentWeight:     626,
+			parentFee:        626,
+			minRelayFee:      253,
+			effectiveFeeRate: 750_000,
+			address:          p2trAddress,
+			currentHeight:    800_000,
+			wantErr:          "is higher than 20% of total funds",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			childTx, childFeeRate, err := makeUnsignedCPFP(
+				tc.parentTxid, tc.parentOutput, tc.parentWeight,
+				tc.parentFee, tc.minRelayFee,
+				tc.effectiveFeeRate, tc.address,
+				tc.currentHeight,
+			)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.wantUnsignedChild, childTx)
+				require.Equal(
+					t, tc.wantChildFeeRate, childFeeRate,
+				)
 			}
 		})
 	}
