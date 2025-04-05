@@ -876,7 +876,7 @@ func (b *batch) Run(ctx context.Context) error {
 			}
 
 		case spend := <-b.spendChan:
-			err := b.handleSpend(runCtx, spend.SpendingTx)
+			err := b.handleSpend(runCtx, spend)
 			if err != nil {
 				return fmt.Errorf("handleSpend error: %w", err)
 			}
@@ -1706,14 +1706,16 @@ func (b *batch) monitorSpend(ctx context.Context, primarySweep sweep) error {
 }
 
 // monitorConfirmations monitors the batch transaction for confirmations.
-func (b *batch) monitorConfirmations(ctx context.Context) error {
+func (b *batch) monitorConfirmations(ctx context.Context,
+	spendingHeight int32) error {
+
 	reorgChan := make(chan struct{})
 
 	confCtx, cancel := context.WithCancel(ctx)
 
 	confChan, errChan, err := b.chainNotifier.RegisterConfirmationsNtfn(
 		confCtx, b.batchTxid, b.batchPkScript, batchConfHeight,
-		b.currentHeight, lndclient.WithReOrgChan(reorgChan),
+		spendingHeight, lndclient.WithReOrgChan(reorgChan),
 	)
 	if err != nil {
 		cancel()
@@ -1794,8 +1796,11 @@ func getFeePortionPaidBySweep(spendTx *wire.MsgTx, feePortionPerSweep,
 }
 
 // handleSpend handles a spend notification.
-func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
+func (b *batch) handleSpend(ctx context.Context,
+	spend *chainntnfs.SpendDetail) error {
+
 	var (
+		spendTx    = spend.SpendingTx
 		txHash     = spendTx.TxHash()
 		purgeList  = make([]SweepRequest, 0, len(b.sweeps))
 		notifyList = make([]sweep, 0, len(b.sweeps))
@@ -1896,7 +1901,7 @@ func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
 	b.Infof("spent, total sweeps: %v, purged sweeps: %v",
 		len(notifyList), len(purgeList))
 
-	err := b.monitorConfirmations(ctx)
+	err := b.monitorConfirmations(ctx, spend.SpendingHeight)
 	if err != nil {
 		return err
 	}

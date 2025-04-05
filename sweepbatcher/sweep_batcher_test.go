@@ -871,14 +871,24 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 		SpendingTx:        spendingTx,
 		SpenderTxHash:     &spendingTxHash,
 		SpenderInputIndex: 0,
-		SpendingHeight:    601,
+
+		// This is previous block height. We test that the following
+		// RegisterConfirmationsNtfn call will use this height and not
+		// the current height (601). This is needed to make sure Loop
+		// can detect confirmations happened in the past in case it was
+		// offline during the confirmation.
+		SpendingHeight: 600,
 	}
 
 	// We notify the spend.
 	lnd.SpendChannel <- spendDetail
 
 	// After receiving the spend, the batch is now monitoring for confs.
-	<-lnd.RegisterConfChannel
+	confReg := <-lnd.RegisterConfChannel
+
+	// Make sure the confirmation has proper height hint. It should pass
+	// the spending height, not the current height.
+	require.Equal(t, int32(600), confReg.HeightHint)
 
 	// The batch should eventually read the spend notification and progress
 	// its state to closed.
