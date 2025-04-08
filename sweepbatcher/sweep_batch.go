@@ -1824,6 +1824,8 @@ func (b *batch) monitorSpend(ctx context.Context, primarySweep sweep) error {
 				return
 
 			case err := <-spendErr:
+				b.writeToSpendErrChan(ctx, err)
+
 				b.writeToErrChan(
 					fmt.Errorf("spend error: %w", err),
 				)
@@ -2192,6 +2194,43 @@ func (b *batch) writeToErrChan(err error) {
 	select {
 	case b.errChan <- err:
 	default:
+	}
+}
+
+// writeToSpendErrChan sends an error to spend error channels of all the sweeps.
+func (b *batch) writeToSpendErrChan(ctx context.Context, spendErr error) {
+	done, err := b.scheduleNextCall()
+	if err != nil {
+		done()
+
+		return
+	}
+	notifiers := make([]*SpendNotifier, 0, len(b.sweeps))
+	for _, s := range b.sweeps {
+		// If the sweep's notifier is empty then this means that a swap
+		// is not waiting to read an update from it, so we can skip
+		// the notification part.
+		if s.notifier == nil || *s.notifier == (SpendNotifier{}) {
+			continue
+		}
+
+		notifiers = append(notifiers, s.notifier)
+	}
+	done()
+
+	for _, notifier := range notifiers {
+		select {
+		// Try to write the error to the notification
+		// channel.
+		case notifier.SpendErrChan <- spendErr:
+
+		// If a quit signal was provided by the swap,
+		// continue.
+		case <-notifier.QuitChan:
+
+		// If the context was canceled, stop.
+		case <-ctx.Done():
+		}
 	}
 }
 
