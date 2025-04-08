@@ -35,7 +35,7 @@ func (s *StoreMock) FetchUnconfirmedSweepBatches(ctx context.Context) (
 
 	result := []*dbBatch{}
 	for _, batch := range s.batches {
-		if batch.State != "confirmed" {
+		if !batch.Confirmed {
 			result = append(result, &batch)
 		}
 	}
@@ -90,7 +90,7 @@ func (s *StoreMock) ConfirmBatch(ctx context.Context, id int32) error {
 		return errors.New("batch not found")
 	}
 
-	batch.State = "confirmed"
+	batch.Confirmed = true
 	s.batches[batch.ID] = batch
 
 	return nil
@@ -189,7 +189,7 @@ func (s *StoreMock) TotalSweptAmount(ctx context.Context, batchID int32) (
 		return 0, errors.New("batch not found")
 	}
 
-	if batch.State != batchConfirmed && batch.State != batchClosed {
+	if !batch.Confirmed {
 		return 0, nil
 	}
 
