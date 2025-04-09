@@ -970,8 +970,8 @@ func (b *batch) Run(ctx context.Context) error {
 				return fmt.Errorf("handleSpend error: %w", err)
 			}
 
-		case <-b.confChan:
-			if err := b.handleConf(runCtx); err != nil {
+		case conf := <-b.confChan:
+			if err := b.handleConf(runCtx, conf); err != nil {
 				return fmt.Errorf("handleConf error: %w", err)
 			}
 
@@ -1870,6 +1870,8 @@ func (b *batch) monitorConfirmations(ctx context.Context) error {
 			}
 
 		case err := <-errChan:
+			b.writeToConfErrChan(ctx, err)
+
 			b.writeToErrChan(fmt.Errorf("confirmations "+
 				"monitoring error: %w", err))
 
@@ -2042,7 +2044,9 @@ func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
 
 // handleConf handles a confirmation notification. This is the final step of the
 // batch. Here we signal to the batcher that this batch was completed.
-func (b *batch) handleConf(ctx context.Context) error {
+func (b *batch) handleConf(ctx context.Context,
+	conf *chainntnfs.TxConfirmation) error {
+
 	// If the batch is in presigned mode, cleanup presignedHelper.
 	presigned, err := b.isPresigned()
 	if err != nil {
@@ -2068,7 +2072,34 @@ func (b *batch) handleConf(ctx context.Context) error {
 	b.Infof("confirmed in txid %s", b.batchTxid)
 	b.state = Confirmed
 
-	return b.store.ConfirmBatch(ctx, b.id)
+	if err := b.store.ConfirmBatch(ctx, b.id); err != nil {
+		return fmt.Errorf("failed to store confirmed state: %w", err)
+	}
+
+	// Send the confirmation to all the notifiers.
+	for _, s := range b.sweeps {
+		// If the sweep's notifier is empty then this means that a swap
+		// is not waiting to read an update from it, so we can skip
+		// the notification part.
+		if s.notifier == nil || s.notifier.ConfChan == nil {
+			continue
+		}
+
+		select {
+		// Try to write the confirmation to the notification
+		// channel.
+		case s.notifier.ConfChan <- conf:
+
+		// If a quit signal was provided by the swap,
+		// continue.
+		case <-s.notifier.QuitChan:
+
+		// If the context was canceled, stop.
+		case <-ctx.Done():
+		}
+	}
+
+	return nil
 }
 
 // isComplete returns true if the batch is completed. This method is used by the
@@ -2212,6 +2243,44 @@ func (b *batch) writeToSpendErrChan(ctx context.Context, spendErr error) {
 		// Try to write the error to the notification
 		// channel.
 		case notifier.SpendErrChan <- spendErr:
+
+		// If a quit signal was provided by the swap,
+		// continue.
+		case <-notifier.QuitChan:
+
+		// If the context was canceled, stop.
+		case <-ctx.Done():
+		}
+	}
+}
+
+// writeToConfErrChan sends an error to confirmation error channels of all the
+// sweeps.
+func (b *batch) writeToConfErrChan(ctx context.Context, confErr error) {
+	done, err := b.scheduleNextCall()
+	if err != nil {
+		done()
+
+		return
+	}
+	notifiers := make([]*SpendNotifier, 0, len(b.sweeps))
+	for _, s := range b.sweeps {
+		// If the sweep's notifier is empty then this means that a swap
+		// is not waiting to read an update from it, so we can skip
+		// the notification part.
+		if s.notifier == nil || s.notifier.ConfErrChan == nil {
+			continue
+		}
+
+		notifiers = append(notifiers, s.notifier)
+	}
+	done()
+
+	for _, notifier := range notifiers {
+		select {
+		// Try to write the error to the notification
+		// channel.
+		case notifier.ConfErrChan <- confErr:
 
 		// If a quit signal was provided by the swap,
 		// continue.
