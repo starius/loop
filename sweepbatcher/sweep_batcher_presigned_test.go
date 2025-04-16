@@ -29,8 +29,9 @@ type mockPresignedHelper struct {
 	// participating in presigning.
 	onlineOutpoints map[wire.OutPoint]bool
 
-	// presignedBatches is the collection of presigned batches.
-	presignedBatches []*wire.MsgTx
+	// presignedBatches is the collection of presigned batches. The key is
+	// primarySweepID.
+	presignedBatches map[wire.OutPoint][]*wire.MsgTx
 
 	// mu should be hold by all the public methods of this type.
 	mu sync.Mutex
@@ -43,8 +44,9 @@ type mockPresignedHelper struct {
 // newMockPresignedHelper returns new instance of mockPresignedHelper.
 func newMockPresignedHelper() *mockPresignedHelper {
 	return &mockPresignedHelper{
-		onlineOutpoints: make(map[wire.OutPoint]bool),
-		cleanupCalled:   make(chan struct{}),
+		onlineOutpoints:  make(map[wire.OutPoint]bool),
+		presignedBatches: make(map[wire.OutPoint][]*wire.MsgTx),
+		cleanupCalled:    make(chan struct{}),
 	}
 }
 
@@ -108,11 +110,16 @@ func (h *mockPresignedHelper) IsPresigned(ctx context.Context,
 
 // Presign tries to presign the transaction. It succeeds if all the inputs
 // are online. In case of success it adds the transaction to presignedBatches.
-func (h *mockPresignedHelper) Presign(ctx context.Context, tx *wire.MsgTx,
+func (h *mockPresignedHelper) Presign(ctx context.Context,
+	primarySweepID wire.OutPoint, tx *wire.MsgTx,
 	inputAmt btcutil.Amount) error {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if !hasInput(tx, primarySweepID) {
+		return fmt.Errorf("primarySweepID %v not in tx", primarySweepID)
+	}
 
 	if offline := h.offlineInputs(tx); len(offline) != 0 {
 		return fmt.Errorf("some inputs of tx are offline: %v", offline)
@@ -120,7 +127,9 @@ func (h *mockPresignedHelper) Presign(ctx context.Context, tx *wire.MsgTx,
 
 	tx = tx.Copy()
 	h.sign(tx)
-	h.presignedBatches = append(h.presignedBatches, tx)
+	h.presignedBatches[primarySweepID] = append(
+		h.presignedBatches[primarySweepID], tx,
+	)
 
 	return nil
 }
@@ -128,47 +137,25 @@ func (h *mockPresignedHelper) Presign(ctx context.Context, tx *wire.MsgTx,
 // DestPkScript returns destination pkScript used in presigned tx sweeping
 // these inputs.
 func (h *mockPresignedHelper) DestPkScript(ctx context.Context,
-	inputs []wire.OutPoint) ([]byte, error) {
+	primarySweepID wire.OutPoint) ([]byte, error) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	inputsSet := make(map[wire.OutPoint]struct{}, len(inputs))
-	for _, input := range inputs {
-		inputsSet[input] = struct{}{}
-	}
-	if len(inputsSet) != len(inputs) {
-		return nil, fmt.Errorf("duplicate inputs")
+	for _, tx := range h.presignedBatches[primarySweepID] {
+		return tx.TxOut[0].PkScript, nil
 	}
 
-	inputsMatch := func(tx *wire.MsgTx) bool {
-		if len(tx.TxIn) != len(inputsSet) {
-			return false
-		}
-
-		for _, txIn := range tx.TxIn {
-			if _, has := inputsSet[txIn.PreviousOutPoint]; !has {
-				return false
-			}
-		}
-
-		return true
-	}
-
-	for _, tx := range h.presignedBatches {
-		if inputsMatch(tx) {
-			return tx.TxOut[0].PkScript, nil
-		}
-	}
-
-	return nil, fmt.Errorf("tx sweeping inputs %v not found", inputs)
+	return nil, fmt.Errorf("tx with primarySweepID %v not found",
+		primarySweepID)
 }
 
 // SignTx tries to sign the transaction. If all the inputs are online, it signs
 // the exact transaction passed and adds it to presignedBatches. Otherwise it
 // looks for a transaction in presignedBatches satisfying the criteria.
-func (h *mockPresignedHelper) SignTx(ctx context.Context, tx *wire.MsgTx,
-	inputAmt btcutil.Amount, minRelayFee, feeRate chainfee.SatPerKWeight,
+func (h *mockPresignedHelper) SignTx(ctx context.Context,
+	primarySweepID wire.OutPoint, tx *wire.MsgTx, inputAmt btcutil.Amount,
+	minRelayFee, feeRate chainfee.SatPerKWeight,
 	loadOnly bool) (*wire.MsgTx, error) {
 
 	h.mu.Lock()
@@ -181,7 +168,9 @@ func (h *mockPresignedHelper) SignTx(ctx context.Context, tx *wire.MsgTx,
 		h.sign(tx)
 
 		// Add to the collection.
-		h.presignedBatches = append(h.presignedBatches, tx)
+		h.presignedBatches[primarySweepID] = append(
+			h.presignedBatches[primarySweepID], tx,
+		)
 
 		return tx, nil
 	}
@@ -194,7 +183,7 @@ func (h *mockPresignedHelper) SignTx(ctx context.Context, tx *wire.MsgTx,
 		bestTx              *wire.MsgTx
 		bestFeerateDistance chainfee.SatPerKWeight
 	)
-	for _, candidate := range h.presignedBatches {
+	for _, candidate := range h.presignedBatches[primarySweepID] {
 		err := CheckSignedTx(tx, candidate, inputAmt, minRelayFee)
 		if err != nil {
 			continue
@@ -225,32 +214,9 @@ func (h *mockPresignedHelper) CleanupTransactions(ctx context.Context,
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	inputsSet := make(map[wire.OutPoint]struct{}, len(inputs))
-	for _, input := range inputs {
-		inputsSet[input] = struct{}{}
+	for _, primarySweepID := range inputs {
+		delete(h.presignedBatches, primarySweepID)
 	}
-	if len(inputsSet) != len(inputs) {
-		return fmt.Errorf("duplicate inputs")
-	}
-
-	var presignedBatches []*wire.MsgTx
-
-	// Filter out transactions spending any of the inputs passed.
-	for _, tx := range h.presignedBatches {
-		var match bool
-		for _, txIn := range tx.TxIn {
-			if _, has := inputsSet[txIn.PreviousOutPoint]; has {
-				match = true
-				break
-			}
-		}
-
-		if !match {
-			presignedBatches = append(presignedBatches, tx)
-		}
-	}
-
-	h.presignedBatches = presignedBatches
 
 	h.cleanupCalled <- struct{}{}
 
@@ -480,7 +446,7 @@ func testPresigned_input1_offline_then_input2(t *testing.T,
 	presignedHelper.SetOutpointOnline(op2, false)
 	const loadOnly = true
 	_, err = presignedHelper.SignTx(
-		ctx, batch2, 2_000_000, chainfee.FeePerKwFloor,
+		ctx, op2, batch2, 2_000_000, chainfee.FeePerKwFloor,
 		chainfee.FeePerKwFloor, loadOnly,
 	)
 	require.NoError(t, err)

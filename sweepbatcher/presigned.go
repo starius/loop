@@ -7,6 +7,7 @@ import (
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -35,11 +36,11 @@ func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep) error {
 
 	// The sweeps are ordered inside the group, the first one is the primary
 	// outpoint in the batch.
-	primaryOutpoint := sweeps[0].outpoint
+	primarySweepID := sweeps[0].outpoint
 
 	// Cache the destination address.
 	destAddr, err := getPresignedSweepsDestAddr(
-		ctx, b.cfg.presignedHelper, primaryOutpoint, b.cfg.chainParams,
+		ctx, b.cfg.presignedHelper, primarySweepID, b.cfg.chainParams,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to find destination address: %w", err)
@@ -66,7 +67,7 @@ func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep) error {
 	}
 	const loadOnly = true
 	signedTx, err := b.cfg.presignedHelper.SignTx(
-		ctx, tx, batchAmt, feeRate, feeRate, loadOnly,
+		ctx, primarySweepID, tx, batchAmt, feeRate, feeRate, loadOnly,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to find a presigned transaction "+
@@ -123,7 +124,7 @@ func (b *batch) presign(ctx context.Context, newSweeps []*sweep) error {
 
 	// Cache the destination address.
 	destAddr, err := getPresignedSweepsDestAddr(
-		ctx, b.cfg.presignedHelper, b.primaryOutpoint,
+		ctx, b.cfg.presignedHelper, b.primarySweepID,
 		b.cfg.chainParams,
 	)
 	if err != nil {
@@ -131,7 +132,7 @@ func (b *batch) presign(ctx context.Context, newSweeps []*sweep) error {
 	}
 
 	return presign(
-		ctx, b.cfg.presignedHelper, destAddr, b.primaryOutpoint, sweeps,
+		ctx, b.cfg.presignedHelper, destAddr, b.primarySweepID, sweeps,
 		nextBlockFeeRate,
 	)
 }
@@ -141,7 +142,7 @@ type presigner interface {
 	// Presign tries to presign a batch transaction. If the method returns
 	// nil, it is guaranteed that future calls to SignTx on this set of
 	// sweeps return valid signed transactions.
-	Presign(ctx context.Context, primaryOutpoint wire.OutPoint,
+	Presign(ctx context.Context, primarySweepID wire.OutPoint,
 		tx *wire.MsgTx, inputAmt btcutil.Amount) error
 }
 
@@ -152,7 +153,7 @@ type presigner interface {
 // A feerate is considered high if it is at least 100 sat/vbyte AND is at least
 // 10x of the current next block feerate.
 func presign(ctx context.Context, presigner presigner, destAddr btcutil.Address,
-	primaryOutpoint wire.OutPoint, sweeps []sweep,
+	primarySweepID wire.OutPoint, sweeps []sweep,
 	nextBlockFeeRate chainfee.SatPerKWeight) error {
 
 	if presigner == nil {
@@ -217,7 +218,7 @@ func presign(ctx context.Context, presigner presigner, destAddr btcutil.Address,
 		}
 
 		// Try to presign this transaction.
-		err = presigner.Presign(ctx, primaryOutpoint, tx, batchAmt)
+		err = presigner.Presign(ctx, primarySweepID, tx, batchAmt)
 		if err != nil {
 			return fmt.Errorf("failed to presign unsigned tx %v "+
 				"for feeRate %v: %w", tx.TxHash(), fr, err)
@@ -266,7 +267,7 @@ func (b *batch) publishPresigned(ctx context.Context) (btcutil.Amount, error,
 
 	// Cache the destination address.
 	address, err := getPresignedSweepsDestAddr(
-		ctx, b.cfg.presignedHelper, b.primaryOutpoint,
+		ctx, b.cfg.presignedHelper, b.primarySweepID,
 		b.cfg.chainParams,
 	)
 	if err != nil {
@@ -302,7 +303,8 @@ func (b *batch) publishPresigned(ctx context.Context) (btcutil.Amount, error,
 	// Get a pre-signed transaction.
 	const loadOnly = false
 	signedTx, err := b.cfg.presignedHelper.SignTx(
-		ctx, tx, batchAmt, minRelayFee, feeRate, loadOnly,
+		ctx, b.primarySweepID, tx, batchAmt, minRelayFee, feeRate,
+		loadOnly,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to sign tx: %w", err),
@@ -361,35 +363,35 @@ type destPkScripter interface {
 	// doesn't exist. If there are many such transactions, returns any of
 	// pkScript's; all of them should have the same destination pkScript.
 	DestPkScript(ctx context.Context,
-		primaryOutpoint wire.OutPoint) ([]byte, error)
+		primarySweepID wire.OutPoint) ([]byte, error)
 }
 
 // getPresignedSweepsDestAddr returns the destination address used by the
 // primary outpoint. The function must be used in presigned mode only.
 func getPresignedSweepsDestAddr(ctx context.Context, helper destPkScripter,
-	primaryOutpoint wire.OutPoint,
+	primarySweepID wire.OutPoint,
 	chainParams *chaincfg.Params) (btcutil.Address, error) {
 
 	// Load pkScript from the presigned helper.
-	pkScriptBytes, err := helper.DestPkScript(ctx, primaryOutpoint)
+	pkScriptBytes, err := helper.DestPkScript(ctx, primarySweepID)
 	if err != nil {
 		return nil, fmt.Errorf("presignedHelper.DestPkScript failed "+
-			"for inputs %v: %w", inputs, err)
+			"for primarySweepID %v: %w", primarySweepID, err)
 	}
 
 	// Convert pkScript to btcutil.Address.
 	pkScript, err := txscript.ParsePkScript(pkScriptBytes)
 	if err != nil {
 		return nil, fmt.Errorf("txscript.ParsePkScript failed for "+
-			"pkScript %x returned for inputs %v: %w", pkScriptBytes,
-			inputs, err)
+			"pkScript %x returned for primarySweepID %v: %w",
+			pkScriptBytes, primarySweepID, err)
 	}
 
 	address, err := pkScript.Address(chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("pkScript.Address failed for "+
-			"pkScript %x returned for inputs %v: %w", pkScriptBytes,
-			inputs, err)
+			"pkScript %x returned for primarySweepID %v: %w",
+			pkScriptBytes, primarySweepID, err)
 	}
 
 	return address, nil

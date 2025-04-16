@@ -173,7 +173,7 @@ type PresignedHelper interface {
 	// Presign tries to presign a batch transaction. If the method returns
 	// nil, it is guaranteed that future calls to SignTx on this set of
 	// sweeps return valid signed transactions.
-	Presign(ctx context.Context, primaryOutpoint wire.OutPoint,
+	Presign(ctx context.Context, primarySweepID wire.OutPoint,
 		tx *wire.MsgTx, inputAmt btcutil.Amount) error
 
 	// DestPkScript returns destination pkScript used by the sweep batch
@@ -181,7 +181,7 @@ type PresignedHelper interface {
 	// doesn't exist. If there are many such transactions, returns any of
 	// pkScript's; all of them should have the same destination pkScript.
 	DestPkScript(ctx context.Context,
-		primaryOutpoint wire.OutPoint) ([]byte, error)
+		primarySweepID wire.OutPoint) ([]byte, error)
 
 	// SignTx signs an unsigned transaction or returns a pre-signed tx.
 	// It must satisfy the following invariants:
@@ -195,7 +195,7 @@ type PresignedHelper interface {
 	// When choosing a presigned transaction, a transaction with fee rate
 	// closer to the fee rate passed is selected. If loadOnly is set, it
 	// doesn't try to sign the transaction and only loads a presigned tx.
-	SignTx(ctx context.Context, primaryOutpoint wire.OutPoint,
+	SignTx(ctx context.Context, primarySweepID wire.OutPoint,
 		tx *wire.MsgTx, inputAmt btcutil.Amount,
 		minRelayFee, feeRate chainfee.SatPerKWeight,
 		loadOnly bool) (*wire.MsgTx, error)
@@ -687,10 +687,10 @@ func (b *Batcher) PresignSweepsGroup(ctx context.Context, inputs []Input,
 
 	// The sweeps are ordered inside the group, the first one is the primary
 	// outpoint in the batch.
-	primaryOutpoint := sweeps[0].outpoint
+	primarySweepID := sweeps[0].outpoint
 
 	return presign(
-		ctx, b.presignedHelper, destAddress, primaryOutpoint, sweeps,
+		ctx, b.presignedHelper, destAddress, primarySweepID, sweeps,
 		nextBlockFeeRate,
 	)
 }

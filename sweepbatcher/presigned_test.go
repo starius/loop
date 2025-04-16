@@ -13,6 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// hasInput returns if the transaction spends the UTXO.
+func hasInput(tx *wire.MsgTx, utxo wire.OutPoint) bool {
+	for _, txIn := range tx.TxIn {
+		if txIn.PreviousOutPoint == utxo {
+			return true
+		}
+	}
+
+	return false
+}
+
 // mockPresigner is an implementation of Presigner used in TestPresign.
 type mockPresigner struct {
 	// outputs collects outputs of presigned transactions.
@@ -27,8 +38,13 @@ type mockPresigner struct {
 
 // Presign memorizes the value of the output and fails if the number of
 // calls previously made is failAt.
-func (p *mockPresigner) Presign(ctx context.Context, tx *wire.MsgTx,
+func (p *mockPresigner) Presign(ctx context.Context,
+	primarySweepID wire.OutPoint, tx *wire.MsgTx,
 	inputAmt btcutil.Amount) error {
+
+	if !hasInput(tx, primarySweepID) {
+		return fmt.Errorf("primarySweepID %v not in tx", primarySweepID)
+	}
 
 	if len(p.outputs)+1 == p.failAt {
 		return fmt.Errorf("test error in Presign")
@@ -58,6 +74,7 @@ func TestPresign(t *testing.T) {
 	cases := []struct {
 		name             string
 		presigner        presigner
+		primarySweepID   wire.OutPoint
 		sweeps           []sweep
 		destAddr         btcutil.Address
 		nextBlockFeeRate chainfee.SatPerKWeight
@@ -66,7 +83,8 @@ func TestPresign(t *testing.T) {
 		wantLockTimes    []uint32
 	}{
 		{
-			name: "error: no presigner",
+			name:           "error: no presigner",
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -81,6 +99,7 @@ func TestPresign(t *testing.T) {
 
 		{
 			name:             "error: no sweeps",
+			primarySweepID:   op1,
 			presigner:        &mockPresigner{},
 			destAddr:         destAddr,
 			nextBlockFeeRate: chainfee.FeePerKwFloor,
@@ -88,8 +107,9 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "error: no destAddr",
-			presigner: &mockPresigner{},
+			name:           "error: no destAddr",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -102,8 +122,9 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "error: zero nextBlockFeeRate",
-			presigner: &mockPresigner{},
+			name:           "error: zero nextBlockFeeRate",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -121,8 +142,9 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "error: timeout is not set",
-			presigner: &mockPresigner{},
+			name:           "error: timeout is not set",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -139,8 +161,45 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "two coop sweeps",
+			name:      "error: primary not set",
 			presigner: &mockPresigner{},
+			sweeps: []sweep{
+				{
+					outpoint: op1,
+					value:    1_000_000,
+					timeout:  1000,
+				},
+				{
+					outpoint: op2,
+					value:    2_000_000,
+					timeout:  1100,
+				},
+			},
+			destAddr:         destAddr,
+			nextBlockFeeRate: chainfee.FeePerKwFloor,
+			wantErr:          "not in tx",
+		},
+
+		{
+			name:           "error: primary not in tx",
+			presigner:      &mockPresigner{},
+			primarySweepID: op2,
+			sweeps: []sweep{
+				{
+					outpoint: op1,
+					value:    1_000_000,
+					timeout:  1000,
+				},
+			},
+			destAddr:         destAddr,
+			nextBlockFeeRate: chainfee.FeePerKwFloor,
+			wantErr:          "not in tx",
+		},
+
+		{
+			name:           "two coop sweeps",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -175,8 +234,46 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "high current feerate => locktime later",
-			presigner: &mockPresigner{},
+			name:           "two coop sweeps, another primary",
+			presigner:      &mockPresigner{},
+			primarySweepID: op2,
+			sweeps: []sweep{
+				{
+					outpoint: op1,
+					value:    1_000_000,
+					timeout:  1000,
+				},
+				{
+					outpoint: op2,
+					value:    2_000_000,
+					timeout:  1100,
+				},
+			},
+			destAddr:         destAddr,
+			nextBlockFeeRate: chainfee.FeePerKwFloor,
+			wantOutputs: []btcutil.Amount{
+				2999842, 2999811, 2999773, 2999728, 2999674,
+				2999609, 2999530, 2999436, 2999324, 2999189,
+				2999026, 2998832, 2998598, 2998318, 2997982,
+				2997578, 2997093, 2996512, 2995815, 2994978,
+				2993974, 2992769, 2991323, 2989588, 2987506,
+				2985007, 2982008, 2978410, 2974092, 2968910,
+				2962692, 2955231, 2946277, 2935533, 2922639,
+				2907167, 2888601, 2866321, 2839585, 2807502,
+				2769002, 2722803,
+			},
+			wantLockTimes: []uint32{
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 950, 950, 950,
+				950, 950, 950, 950, 950, 950, 950, 950, 950,
+				950, 950, 950, 950,
+			},
+		},
+
+		{
+			name:           "high current feerate => locktime later",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -210,8 +307,9 @@ func TestPresign(t *testing.T) {
 		},
 
 		{
-			name:      "small amount => fewer steps until clamped",
-			presigner: &mockPresigner{},
+			name:           "small amount => fewer steps until clamped",
+			presigner:      &mockPresigner{},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -240,6 +338,7 @@ func TestPresign(t *testing.T) {
 			presigner: &mockPresigner{
 				failAt: 3,
 			},
+			primarySweepID: op1,
 			sweeps: []sweep{
 				{
 					outpoint: op1,
@@ -261,7 +360,8 @@ func TestPresign(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := presign(
-				ctx, tc.presigner, tc.destAddr, tc.sweeps,
+				ctx, tc.presigner, tc.destAddr,
+				tc.primarySweepID, tc.sweeps,
 				tc.nextBlockFeeRate,
 			)
 			if tc.wantErr != "" {
