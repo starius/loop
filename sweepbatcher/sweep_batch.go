@@ -656,7 +656,7 @@ func (b *batch) addSweeps(ctx context.Context, sweeps []*sweep) (bool, error) {
 				b.Warnf("Failed to check signing of input %x,"+
 					" this means that PresignSweepsGroup "+
 					"was not called prior to AddSweep for"+
-					" this input: %w",
+					" this input: %v",
 					sweeps[0].swapHash[:6], err)
 
 				return false, nil

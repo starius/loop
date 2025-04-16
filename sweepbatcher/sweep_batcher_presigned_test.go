@@ -1285,6 +1285,161 @@ func testPresigned_presigned_and_regular_sweeps(t *testing.T, store testStore,
 	require.Equal(t, int64(4993740), tx4.TxOut[0].Value)
 }
 
+// testPresigned_purging tests what happens if a non-final version of the batch
+// is confirmed. Missing sweeps must are added to new batch(es) having valid
+// presigned transactions even if the sweeps are offline at that moment.
+func testPresigned_purging(t *testing.T, batcherStore testBatcherStore) {
+	defer test.Guard(t)()
+
+	lnd := test.NewMockLnd()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	customFeeRate := func(_ context.Context,
+		_ lntypes.Hash) (chainfee.SatPerKWeight, error) {
+
+		return chainfee.SatPerKWeight(10_000), nil
+	}
+
+	presignedHelper := newMockPresignedHelper()
+
+	batcher := NewBatcher(
+		lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
+		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
+		batcherStore, &dummySweepFetcherMock{},
+		WithCustomFeeRate(customFeeRate),
+		WithPresignedHelper(presignedHelper),
+	)
+
+	go func() {
+		err := batcher.Run(ctx)
+		checkBatcherError(t, err)
+	}()
+
+	// Create a swap of two sweeps.
+	swapHash1 := lntypes.Hash{1, 1, 1}
+	op1 := wire.OutPoint{
+		Hash:  chainhash.Hash{1, 1},
+		Index: 1,
+	}
+	op2 := wire.OutPoint{
+		Hash:  chainhash.Hash{2, 2},
+		Index: 2,
+	}
+	group1 := []Input{
+		{
+			// op2 is primarySweepID. Make sure that a UTXO can
+			// function as primarySweepID even if it is not the
+			// minimum UTXO in the sorted order.
+			Outpoint: op2,
+			Value:    2_000_000,
+		},
+		{
+			Outpoint: op1,
+			Value:    1_000_000,
+		},
+	}
+
+	// Enable both sweeps.
+	presignedHelper.SetOutpointOnline(op1, true)
+	presignedHelper.SetOutpointOnline(op2, true)
+
+	// An attempt to presign must succeed.
+	err := batcher.PresignSweepsGroup(ctx, group1, sweepTimeout, destAddr)
+	require.NoError(t, err)
+
+	// Add the sweep, triggering the publish attempt.
+	require.NoError(t, batcher.AddSweep(&SweepRequest{
+		SwapHash: swapHash1,
+		Inputs:   group1,
+		Notifier: &dummyNotifier,
+	}))
+
+	// Since a batch was created we check that it registered for its primary
+	// sweep's spend.
+	<-lnd.RegisterSpendChannel
+
+	// Wait for a transactions to be published.
+	tx1 := <-lnd.TxPublishChannel
+
+	// Add another group of sweeps.
+	swapHash2 := lntypes.Hash{2, 2, 2}
+	op3 := wire.OutPoint{
+		Hash:  chainhash.Hash{3, 3},
+		Index: 3,
+	}
+	op4 := wire.OutPoint{
+		Hash:  chainhash.Hash{4, 4},
+		Index: 4,
+	}
+	group2 := []Input{
+		{
+			Outpoint: op3,
+			Value:    3_000_000,
+		},
+		{
+			Outpoint: op4,
+			Value:    4_000_000,
+		},
+	}
+	presignedHelper.SetOutpointOnline(op3, true)
+	presignedHelper.SetOutpointOnline(op4, true)
+
+	// An attempt to presign must succeed.
+	err = batcher.PresignSweepsGroup(ctx, group2, sweepTimeout, destAddr)
+	require.NoError(t, err)
+
+	// Add the sweep. It should go to the same batch.
+	require.NoError(t, batcher.AddSweep(&SweepRequest{
+		SwapHash: swapHash2,
+		Inputs:   group2,
+		Notifier: &dummyNotifier,
+	}))
+
+	// Mine a blocks to trigger republishing.
+	require.NoError(t, lnd.NotifyHeight(601))
+	tx2 := <-lnd.TxPublishChannel
+	require.Len(t, tx2.TxIn, 4)
+
+	// Make op3 and op4 offline.
+	presignedHelper.SetOutpointOnline(op3, true)
+	presignedHelper.SetOutpointOnline(op4, true)
+
+	// Now confirm previously broadcasted transaction (op1 and op2).
+	tx1hash := tx1.TxHash()
+	spendDetail := &chainntnfs.SpendDetail{
+		SpentOutPoint:     &op2,
+		SpendingTx:        tx1,
+		SpenderTxHash:     &tx1hash,
+		SpenderInputIndex: 0,
+		SpendingHeight:    601,
+	}
+	lnd.SpendChannel <- spendDetail
+	<-lnd.RegisterConfChannel
+	require.NoError(t, lnd.NotifyHeight(604))
+	lnd.ConfChannel <- &chainntnfs.TxConfirmation{
+		Tx: tx1,
+	}
+
+	// CleanupTransactions is called here.
+	<-presignedHelper.cleanupCalled
+
+	// op3 and op4 missing in the confirmed transaction should be re-added
+	// to the batcher as new batch. We should have already a presigned tx
+	// for op3 and op4, since they are offline now.
+	<-lnd.RegisterSpendChannel
+	tx3 := <-lnd.TxPublishChannel
+	require.ElementsMatch(
+		t, []wire.OutPoint{op3, op4},
+		[]wire.OutPoint{
+			tx3.TxIn[0].PreviousOutPoint,
+			tx3.TxIn[1].PreviousOutPoint,
+		},
+	)
+
+}
+
 // TestPresigned tests presigned mode. Most sub-tests doesn't use loopdb.
 func TestPresigned(t *testing.T) {
 	logger := btclog.NewSLogger(btclog.NewDefaultHandler(os.Stdout))
@@ -1314,4 +1469,9 @@ func TestPresigned(t *testing.T) {
 	t.Run("presigned_and_regular_sweeps", func(t *testing.T) {
 		runTests(t, testPresigned_presigned_and_regular_sweeps)
 	})
+
+	t.Run("purging", func(t *testing.T) {
+		testPresigned_purging(t, NewStoreMock())
+	})
+
 }
