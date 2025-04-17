@@ -16,11 +16,13 @@ import (
 
 // ensurePresigned checks that we can sign a transaction sweeping the inputs of
 // this group only.
-func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep) error {
+func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep,
+	allowNonEmptyBatch bool) error {
+
 	if b.cfg.presignedHelper == nil {
 		return fmt.Errorf("presignedHelper is not installed")
 	}
-	if len(b.sweeps) != 0 {
+	if len(b.sweeps) != 0 && !allowNonEmptyBatch {
 		return fmt.Errorf("ensurePresigned should be done when " +
 			"adding to an empty batch")
 	}
@@ -85,9 +87,90 @@ func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep) error {
 	return nil
 }
 
+// getOrderedSweeps returns the sweeps of the batch in the order they were
+// added. The method must be called from the event loop of the batch.
+func (b *batch) getOrderedSweeps(ctx context.Context) ([]sweep, error) {
+	// We use the DB just to know the order. Sweeps are copied from RAM.
+	utxo2sweep := make(map[wire.OutPoint]sweep, len(b.sweeps))
+	for _, s := range b.sweeps {
+		utxo2sweep[s.outpoint] = s
+	}
+
+	dbSweeps, err := b.store.FetchBatchSweeps(ctx, b.id)
+	if err != nil {
+		return nil, fmt.Errorf("FetchBatchSweeps(%d) failed: %w", b.id,
+			err)
+	}
+	if len(dbSweeps) != len(utxo2sweep) {
+		return nil, fmt.Errorf("FetchBatchSweeps(%d) returned %d "+
+			"sweeps, len(b.sweeps) is %d", b.id, len(dbSweeps),
+			len(utxo2sweep))
+	}
+
+	orderedSweeps := make([]sweep, len(dbSweeps))
+	for i, dbSweep := range dbSweeps {
+		// Sanity check: make sure dbSweep.ID grows.
+		if i > 0 && dbSweep.ID <= dbSweeps[i-1].ID {
+			return nil, fmt.Errorf("sweep ID does not grow: %d->%d",
+				dbSweeps[i-1].ID, dbSweep.ID)
+		}
+
+		s, has := utxo2sweep[dbSweep.Outpoint]
+		if !has {
+			return nil, fmt.Errorf("FetchBatchSweeps(%d) returned "+
+				"unknown sweep %v", b.id, dbSweep.Outpoint)
+		}
+		orderedSweeps[i] = s
+	}
+
+	return orderedSweeps, nil
+}
+
+// getSweepsGroups returns groups in which sweeps were added to the batch.
+// All the sweeps are sorted by addition order and groupped by swap.
+// The method must be called from the event loop of the batch.
+func (b *batch) getSweepsGroups(ctx context.Context) ([][]sweep, error) {
+	orderedSweeps, err := b.getOrderedSweeps(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getOrderedSweeps(%d) failed: %w", b.id,
+			err)
+	}
+
+	groups := [][]sweep{}
+	for _, s := range orderedSweeps {
+		// Start new group if there are no groups or new swap starts.
+		if len(groups) == 0 ||
+			s.swapHash != groups[len(groups)-1][0].swapHash {
+
+			groups = append(groups, []sweep{})
+		}
+
+		index := len(groups)-1
+		groups[index] = append(groups[index], s)
+	}
+
+	// Sanity check: make sure the number of groups is the same as the
+	// number of distinct swaps.
+	swapsSet := make(map[lntypes.Hash]struct{}, len(groups))
+	for _, s := range orderedSweeps {
+		swapsSet[s.swapHash] = struct{}{}
+	}
+	if len(swapsSet) != len(groups) {
+		return nil, fmt.Errorf("batch %d: there are %d groups of "+
+			"sweeps and %d distinct swaps", b.id, len(groups),
+			len(swapsSet))
+	}
+
+	return groups, nil
+}
+
 // presign tries to presign batch sweep transactions composed of this batch and
-// the sweep. It signs multiple versions of the transaction to make sure there
-// is a transaction to be published if minRelayFee grows.
+// the sweep. In addition to that it presigns sweep transactions for any subset
+// of sweeps that could remain if one of the sweep transactions gets confirmed.
+// This can be done efficiently, since we keep track of the order in which
+// sweeps are added and the associated swap hashes. So we presign transactions
+// sweeping all the sweeps starting at some past sweeps group. For each inputs
+// layout it presigns many transactions with different fee rates.
 func (b *batch) presign(ctx context.Context, newSweeps []*sweep) error {
 	if b.cfg.presignedHelper == nil {
 		return fmt.Errorf("presignedHelper is not installed")
@@ -113,28 +196,69 @@ func (b *batch) presign(ctx context.Context, newSweeps []*sweep) error {
 
 	b.Infof("nextBlockFeeRate is %v", nextBlockFeeRate)
 
-	// Create the list of sweeps of the future batch.
-	sweeps := make([]sweep, 0, len(b.sweeps)+1)
-	for _, sweep := range b.sweeps {
-		sweeps = append(sweeps, sweep)
-	}
-	for _, sweep := range newSweeps {
-		sweeps = append(sweeps, *sweep)
-	}
-
-	// Cache the destination address.
-	destAddr, err := getPresignedSweepsDestAddr(
-		ctx, b.cfg.presignedHelper, b.primarySweepID,
-		b.cfg.chainParams,
-	)
+	// We need to restore previously added groups. We can do it by reading
+	// all the sweeps from DB (they must be ordered) and grouping by swap.
+	groups, err := b.getSweepsGroups(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to find destination address: %w", err)
+		return fmt.Errorf("getSweepsGroups failed: %w", err)
+	}
+	if len(groups) == 0 {
+		return fmt.Errorf("getSweepsGroups returned no sweeps groups")
 	}
 
-	return presign(
-		ctx, b.cfg.presignedHelper, destAddr, b.primarySweepID, sweeps,
-		nextBlockFeeRate,
-	)
+	// Now presign a transaction spending a suffix of groups as well as new
+	// sweeps. Any non-empty suffix of groups may remain non-swept after
+	// some past tx is confirmed.
+	for len(groups) != 0 {
+		// Create the list of sweeps from the remaining groups and new
+		// sweeps.
+		sweeps := make([]sweep, 0, len(b.sweeps)+len(newSweeps))
+		for _, group := range groups {
+			for _, sweep := range group {
+				sweeps = append(sweeps, sweep)
+			}
+		}
+		for _, sweep := range newSweeps {
+			sweeps = append(sweeps, *sweep)
+		}
+
+		// The primarySweepID is the first sweep from the list of
+		// remaining sweeps if previous groups are confirmed.
+		primarySweepID := sweeps[0].outpoint
+
+		// Cache the destination address.
+		destAddr, err := getPresignedSweepsDestAddr(
+			ctx, b.cfg.presignedHelper, b.primarySweepID,
+			b.cfg.chainParams,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to find destination address: %w", err)
+		}
+
+		err = presign(
+			ctx, b.cfg.presignedHelper, destAddr, primarySweepID,
+			sweeps, nextBlockFeeRate,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to presign a transaction "+
+				"of %d sweeps: %w", len(sweeps), err)
+		}
+
+		// Cut a group to proceed to next suffix of original groups.
+		groups = groups[1:]
+	}
+
+	// Ensure that a batch spending new sweeps only has been presigned by
+	// PresignSweepsGroup.
+	const allowNonEmptyBatch = true
+	err = b.ensurePresigned(ctx, newSweeps, allowNonEmptyBatch)
+	if err != nil {
+		return fmt.Errorf("new sweeps were not presigned; this means "+
+			"that PresignSweepsGroup was not called prior to "+
+			"AddSweep for the group: %w", err)
+	}
+
+	return nil
 }
 
 // presigner tries to presign a batch transaction.

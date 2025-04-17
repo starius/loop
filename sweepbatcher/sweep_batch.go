@@ -652,7 +652,11 @@ func (b *batch) addSweeps(ctx context.Context, sweeps []*sweep) (bool, error) {
 		// If this is a new batch being formed, make sure we already
 		// have a presigned transaction.
 		default:
-			if err := b.ensurePresigned(ctx, sweeps); err != nil {
+			const allowNonEmptyBatch = false
+			err := b.ensurePresigned(
+				ctx, sweeps, allowNonEmptyBatch,
+			)
+			if err != nil {
 				b.Warnf("Failed to check signing of input %x,"+
 					" this means that PresignSweepsGroup "+
 					"was not called prior to AddSweep for"+
@@ -1948,13 +1952,40 @@ func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
 		b.Warnf("transaction %v has no outputs", txHash)
 	}
 
+	// Determine if we should use presigned mode for the batch.
+	presigned, err := b.isPresigned()
+	if err != nil {
+		return fmt.Errorf("failed to determine if the batch %d uses "+
+			"presigned mode: %w", b.id, err)
+	}
+
+	// Sort sweeps by the addition order if this is presigned mode.
+	var allSweeps []sweep
+	if presigned {
+		allSweeps, err = b.getOrderedSweeps(ctx)
+		if err != nil {
+			return fmt.Errorf("getOrderedSweeps(%d) failed: %w",
+				b.id, err)
+		}
+	} else {
+		allSweeps = make([]sweep, 0, len(b.sweeps))
+		for _, s := range b.sweeps {
+			allSweeps = append(allSweeps, s)
+		}
+	}
+
 	// As a previous version of the batch transaction may get confirmed,
 	// which does not contain the latest sweeps, we need to detect the
 	// sweeps that did not make it to the confirmed transaction and feed
 	// them back to the batcher. This will ensure that the sweeps will enter
 	// a new batch instead of remaining dangling.
-	var totalSweptAmt btcutil.Amount
-	for _, sweep := range b.sweeps {
+	var (
+		totalSweptAmt btcutil.Amount
+		confirmedSweeps = []wire.OutPoint{}
+		purgedSweeps = []wire.OutPoint{}
+		purgedSwaps = []lntypes.Hash{}
+	)
+	for _, sweep := range allSweeps {
 		found := false
 
 		for _, txIn := range spendTx.TxIn {
@@ -1962,25 +1993,49 @@ func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
 				found = true
 				totalSweptAmt += sweep.value
 				notifyList = append(notifyList, sweep)
+				confirmedSweeps = append(
+					confirmedSweeps, sweep.outpoint,
+				)
 			}
 		}
 
 		// If the sweep's outpoint was not found in the transaction's
 		// inputs this means it was left out. So we delete it from this
 		// batch and feed it back to the batcher.
-		if !found {
-			newSweep := sweep
-			delete(b.sweeps, sweep.outpoint)
+		if found {
+			continue
+		}
+
+		newSweep := sweep
+		delete(b.sweeps, sweep.outpoint)
+
+		newInput := Input{
+			Outpoint: newSweep.outpoint,
+			Value:    newSweep.value,
+		}
+
+		// In presigned mode we should form a SweepRequest per swap
+		// (i.e. per group) and keep them ordered.
+		L := len(purgeList)
+		if presigned && L != 0 &&
+			purgeList[L-1].SwapHash == newSweep.swapHash {
+
+			// Add the input to existing SweepRequest for this swap.
+			purgeList[L-1].Inputs = append(
+				purgeList[L-1].Inputs, newInput,
+			)
+		} else {
 			purgeList = append(purgeList, SweepRequest{
 				SwapHash: newSweep.swapHash,
-				Inputs: []Input{
-					{
-						Outpoint: newSweep.outpoint,
-						Value:    newSweep.value,
-					},
-				},
+				Inputs: []Input{newInput},
 				Notifier: newSweep.notifier,
 			})
+		}
+	}
+	for _, sweepReq := range purgeList {
+		purgedSwaps = append(purgedSwaps, sweepReq.SwapHash)
+		for _, input := range sweepReq.Inputs {
+			purgedSweeps = append(purgedSweeps, input.Outpoint)
 		}
 	}
 
@@ -2025,19 +2080,19 @@ func (b *batch) handleSpend(ctx context.Context, spendTx *wire.MsgTx) error {
 	go func() {
 		// Iterate over the purge list and feed the sweeps back to the
 		// batcher.
-		for _, sweep := range purgeList {
-			err := b.purger(&sweep)
+		for _, sweepReq := range purgeList {
+			err := b.purger(&sweepReq)
 			if err != nil {
-				b.Errorf("unable to purge sweep %x: %v",
-					sweep.SwapHash[:6], err)
+				b.Errorf("unable to purge sweep group %x: %v",
+					sweepReq.SwapHash[:6], err)
 			}
 		}
 	}()
 
-	b.Infof("spent, total sweeps: %v, purged sweeps: %v",
-		len(notifyList), len(purgeList))
+	b.Infof("spent, confirmed sweeps: %v, purged sweeps: %v, "+
+		"purged swaps: %v", confirmedSweeps, purgedSweeps, purgedSwaps)
 
-	err := b.monitorConfirmations(ctx)
+	err = b.monitorConfirmations(ctx)
 	if err != nil {
 		return err
 	}

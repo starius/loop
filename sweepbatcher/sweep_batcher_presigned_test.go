@@ -117,6 +117,16 @@ func (h *mockPresignedHelper) Presign(ctx context.Context,
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// Check if such a transaction already exists. This is not only an
+	// optimization, but also enables re-adding multiple groups if sweeps
+	// are offline.
+	wantTxHash := tx.TxHash()
+	for _, candidate := range h.presignedBatches[primarySweepID] {
+		if candidate.TxHash() == wantTxHash {
+			return nil
+		}
+	}
+
 	if !hasInput(tx, primarySweepID) {
 		return fmt.Errorf("primarySweepID %v not in tx", primarySweepID)
 	}
@@ -1288,8 +1298,14 @@ func testPresigned_presigned_and_regular_sweeps(t *testing.T, store testStore,
 // testPresigned_purging tests what happens if a non-final version of the batch
 // is confirmed. Missing sweeps must are added to new batch(es) having valid
 // presigned transactions even if the sweeps are offline at that moment.
-func testPresigned_purging(t *testing.T, batcherStore testBatcherStore) {
+func testPresigned_purging(t *testing.T, numSwaps, numConfirmedSwaps int,
+	batcherStore testBatcherStore) {
+
 	defer test.Guard(t)()
+
+	require.LessOrEqual(t, numConfirmedSwaps, numSwaps)
+
+	const sweepsPerSwap = 2
 
 	lnd := test.NewMockLnd()
 
@@ -1317,127 +1333,136 @@ func testPresigned_purging(t *testing.T, batcherStore testBatcherStore) {
 		checkBatcherError(t, err)
 	}()
 
-	// Create a swap of two sweeps.
-	swapHash1 := lntypes.Hash{1, 1, 1}
-	op1 := wire.OutPoint{
-		Hash:  chainhash.Hash{1, 1},
-		Index: 1,
+	txs := make([]*wire.MsgTx, numSwaps)
+	allOps := make([]wire.OutPoint, 0, numSwaps*sweepsPerSwap)
+
+	for i := range numSwaps {
+		// Create a swap of sweepsPerSwap sweeps.
+		swapHash := lntypes.Hash{byte(i+1)}
+		ops := make([]wire.OutPoint, sweepsPerSwap)
+		group := make([]Input, sweepsPerSwap)
+		for j := range sweepsPerSwap {
+			// // Order sweeps in reverse order to make sure that a
+			// // UTXO can function as primarySweepID even if it is not
+			// // the minimum UTXO in the sorted order.
+			ops[j] = wire.OutPoint{
+				Hash:  chainhash.Hash{byte(1+i*2+j)},
+				Index: uint32(1+i*2+j),
+			}
+			allOps = append(allOps, ops[j])
+
+			group[j] = Input{
+				Outpoint: ops[j],
+				Value: btcutil.Amount(1_000_000 * (j+1)),
+			}
+		}
+
+		// Enable both sweeps.
+		for _, op := range ops {
+			presignedHelper.SetOutpointOnline(op, true)
+		}
+
+		// An attempt to presign must succeed.
+		err := batcher.PresignSweepsGroup(
+			ctx, group, sweepTimeout, destAddr,
+		)
+		require.NoError(t, err)
+
+		// Add the sweep, triggering the publish attempt.
+		require.NoError(t, batcher.AddSweep(&SweepRequest{
+			SwapHash: swapHash,
+			Inputs:   group,
+			Notifier: &dummyNotifier,
+		}))
+
+		// For the first group it should register for the sweep's spend
+		// and publish a transaction.
+		if i == 0 {
+			<-lnd.RegisterSpendChannel
+		} else {
+			// Trigger transaction publishing after each group.
+			require.NoError(t, lnd.NotifyHeight(int32(601+i)))
+		}
+
+		// Wait for a transactions to be published.
+		tx := <-lnd.TxPublishChannel
+		txs[i] = tx
 	}
-	op2 := wire.OutPoint{
-		Hash:  chainhash.Hash{2, 2},
-		Index: 2,
-	}
-	group1 := []Input{
-		{
-			// op2 is primarySweepID. Make sure that a UTXO can
-			// function as primarySweepID even if it is not the
-			// minimum UTXO in the sorted order.
-			Outpoint: op2,
-			Value:    2_000_000,
-		},
-		{
-			Outpoint: op1,
-			Value:    1_000_000,
-		},
+
+	// Record batch ID of the first batch.
+	batch1id := getOnlyBatch(t, ctx, batcher).id
+
+	// Turn off all the sweeps.
+	for _, op := range allOps {
+		presignedHelper.SetOutpointOnline(op, false)
 	}
 
-	// Enable both sweeps.
-	presignedHelper.SetOutpointOnline(op1, true)
-	presignedHelper.SetOutpointOnline(op2, true)
-
-	// An attempt to presign must succeed.
-	err := batcher.PresignSweepsGroup(ctx, group1, sweepTimeout, destAddr)
-	require.NoError(t, err)
-
-	// Add the sweep, triggering the publish attempt.
-	require.NoError(t, batcher.AddSweep(&SweepRequest{
-		SwapHash: swapHash1,
-		Inputs:   group1,
-		Notifier: &dummyNotifier,
-	}))
-
-	// Since a batch was created we check that it registered for its primary
-	// sweep's spend.
-	<-lnd.RegisterSpendChannel
-
-	// Wait for a transactions to be published.
-	tx1 := <-lnd.TxPublishChannel
-
-	// Add another group of sweeps.
-	swapHash2 := lntypes.Hash{2, 2, 2}
-	op3 := wire.OutPoint{
-		Hash:  chainhash.Hash{3, 3},
-		Index: 3,
-	}
-	op4 := wire.OutPoint{
-		Hash:  chainhash.Hash{4, 4},
-		Index: 4,
-	}
-	group2 := []Input{
-		{
-			Outpoint: op3,
-			Value:    3_000_000,
-		},
-		{
-			Outpoint: op4,
-			Value:    4_000_000,
-		},
-	}
-	presignedHelper.SetOutpointOnline(op3, true)
-	presignedHelper.SetOutpointOnline(op4, true)
-
-	// An attempt to presign must succeed.
-	err = batcher.PresignSweepsGroup(ctx, group2, sweepTimeout, destAddr)
-	require.NoError(t, err)
-
-	// Add the sweep. It should go to the same batch.
-	require.NoError(t, batcher.AddSweep(&SweepRequest{
-		SwapHash: swapHash2,
-		Inputs:   group2,
-		Notifier: &dummyNotifier,
-	}))
-
-	// Mine a blocks to trigger republishing.
-	require.NoError(t, lnd.NotifyHeight(601))
-	tx2 := <-lnd.TxPublishChannel
-	require.Len(t, tx2.TxIn, 4)
-
-	// Make op3 and op4 offline.
-	presignedHelper.SetOutpointOnline(op3, true)
-	presignedHelper.SetOutpointOnline(op4, true)
+	// Now mine the transaction which includes first numConfirmedSwaps.
+	tx := txs[numConfirmedSwaps-1]
 
 	// Now confirm previously broadcasted transaction (op1 and op2).
-	tx1hash := tx1.TxHash()
+	txHash := tx.TxHash()
 	spendDetail := &chainntnfs.SpendDetail{
-		SpentOutPoint:     &op2,
-		SpendingTx:        tx1,
-		SpenderTxHash:     &tx1hash,
+		SpentOutPoint:     &allOps[0],
+		SpendingTx:        tx,
+		SpenderTxHash:     &txHash,
 		SpenderInputIndex: 0,
-		SpendingHeight:    601,
+		SpendingHeight:    int32(601+numSwaps+1),
 	}
 	lnd.SpendChannel <- spendDetail
 	<-lnd.RegisterConfChannel
-	require.NoError(t, lnd.NotifyHeight(604))
+	require.NoError(t, lnd.NotifyHeight(
+		int32(601+numSwaps+1+batchConfHeight),
+	))
 	lnd.ConfChannel <- &chainntnfs.TxConfirmation{
-		Tx: tx1,
+		Tx: tx,
 	}
 
 	// CleanupTransactions is called here.
 	<-presignedHelper.cleanupCalled
 
-	// op3 and op4 missing in the confirmed transaction should be re-added
-	// to the batcher as new batch. We should have already a presigned tx
-	// for op3 and op4, since they are offline now.
-	<-lnd.RegisterSpendChannel
-	tx3 := <-lnd.TxPublishChannel
-	require.ElementsMatch(
-		t, []wire.OutPoint{op3, op4},
-		[]wire.OutPoint{
-			tx3.TxIn[0].PreviousOutPoint,
-			tx3.TxIn[1].PreviousOutPoint,
-		},
-	)
+	// If all the swaps were confirmed, stop.
+	if numConfirmedSwaps == numSwaps {
+		return
+	}
 
+	// Missing sweeps in the confirmed transaction should be re-added to the
+	// batcher as new batch. The groups are added incrementally, so we need
+	// to wait until the batch reaches the expected size.
+	<-lnd.RegisterSpendChannel
+	<-lnd.TxPublishChannel
+
+	// Wait to new batch to appear and to have the expected size.
+	wantSize := (numSwaps - numConfirmedSwaps) * sweepsPerSwap
+	require.Eventually(t, func() bool {
+		// Wait for a batch with new ID to appear.
+		batches := getBatches(ctx, batcher)
+		var batch2 *batch
+		for _, b := range batches {
+			if b.id != batch1id {
+				batch2 = b
+			}
+		}
+		if batch2 == nil {
+			return false
+		}
+
+		// Check the size of the second batch.
+		return batch2.numSweeps(ctx) == wantSize
+	}, test.Timeout, eventuallyCheckFrequency)
+
+	// Now trigger batch publishing and inspect the published tx.
+	require.NoError(t, lnd.NotifyHeight(int32(
+		601+numSwaps+1+batchConfHeight+1,
+	)))
+	tx2 := <-lnd.TxPublishChannel
+	wantOps := allOps[numConfirmedSwaps*sweepsPerSwap:]
+	gotOps := make([]wire.OutPoint, 0, len(tx2.TxIn))
+	for _, txIn := range tx2.TxIn {
+		gotOps = append(gotOps, txIn.PreviousOutPoint)
+	}
+
+	require.ElementsMatch(t, wantOps, gotOps)
 }
 
 // TestPresigned tests presigned mode. Most sub-tests doesn't use loopdb.
@@ -1471,7 +1496,24 @@ func TestPresigned(t *testing.T) {
 	})
 
 	t.Run("purging", func(t *testing.T) {
-		testPresigned_purging(t, NewStoreMock())
+		t.Run("1 swap, 1 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 1, 1, NewStoreMock())
+		})
+		t.Run("2 swaps, 1 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 2, 1, NewStoreMock())
+		})
+		t.Run("2 swaps, 2 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 2, 2, NewStoreMock())
+		})
+		t.Run("3 swaps, 1 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 3, 1, NewStoreMock())
+		})
+		t.Run("3 swaps, 2 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 3, 2, NewStoreMock())
+		})
+		t.Run("5 swaps, 2 confirmed", func(t *testing.T) {
+			testPresigned_purging(t, 5, 2, NewStoreMock())
+		})
 	})
 
 }

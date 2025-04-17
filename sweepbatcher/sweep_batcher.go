@@ -172,7 +172,9 @@ type PresignedHelper interface {
 
 	// Presign tries to presign a batch transaction. If the method returns
 	// nil, it is guaranteed that future calls to SignTx on this set of
-	// sweeps return valid signed transactions.
+	// sweeps return valid signed transactions. The implementation should
+	// first check if this transaction already exists in the store to skip
+	// cosigning if possible.
 	Presign(ctx context.Context, primarySweepID wire.OutPoint,
 		tx *wire.MsgTx, inputAmt btcutil.Amount) error
 
