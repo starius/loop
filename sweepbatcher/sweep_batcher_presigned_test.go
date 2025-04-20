@@ -193,9 +193,13 @@ func (h *mockPresignedHelper) SignTx(ctx context.Context,
 		bestTx              *wire.MsgTx
 		bestFeerateDistance chainfee.SatPerKWeight
 	)
+
+	fmt.Println("presignedBatches", len(h.presignedBatches[primarySweepID]))
+
 	for _, candidate := range h.presignedBatches[primarySweepID] {
 		err := CheckSignedTx(tx, candidate, inputAmt, minRelayFee)
 		if err != nil {
+			fmt.Println("err", err, inputAmt)
 			continue
 		}
 
@@ -251,6 +255,70 @@ func (f *dummySweepFetcherMock) FetchSweep(_ context.Context,
 	}, nil
 }
 
+// testPresigned_forgotten_presign checks that adding sweeps causes the batcher
+// to fail of the sweeps were not presigned with PresignSweepsGroup. In addition
+// to that it checks that PresignSweepsGroup fails if the outpoint is offline.
+func testPresigned_forgotten_presign(t *testing.T,
+	batcherStore testBatcherStore) {
+
+	defer test.Guard(t)()
+
+	lnd := test.NewMockLnd()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	customFeeRate := func(_ context.Context,
+		_ lntypes.Hash) (chainfee.SatPerKWeight, error) {
+
+		return chainfee.SatPerKWeight(10_000), nil
+	}
+
+	presignedHelper := newMockPresignedHelper()
+
+	batcher := NewBatcher(lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
+		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
+		batcherStore, &dummySweepFetcherMock{},
+		WithCustomFeeRate(customFeeRate),
+		WithPresignedHelper(presignedHelper))
+
+	batcherErrChan := make(chan error)
+	go func() {
+		batcherErrChan <- batcher.Run(ctx)
+	}()
+
+	// Create the first sweep.
+	swapHash1 := lntypes.Hash{1, 1, 1}
+	op1 := wire.OutPoint{
+		Hash:  chainhash.Hash{1, 1},
+		Index: 1,
+	}
+	sweepReq1 := SweepRequest{
+		SwapHash: swapHash1,
+		Inputs: []Input{{
+			Value:    1_000_000,
+			Outpoint: op1,
+		}},
+		Notifier: &dummyNotifier,
+	}
+
+	// This should fail, because the input is offline.
+	presignedHelper.SetOutpointOnline(op1, false)
+	err := batcher.PresignSweepsGroup(
+		ctx, []Input{{Outpoint: op1, Value: 1_000_000}},
+		sweepTimeout, destAddr,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "offline")
+
+	// Make sure that the batcher crashes if AddSweep is called before
+	// PresignSweepsGroup even if the input is online.
+	presignedHelper.SetOutpointOnline(op1, true)
+	require.NoError(t, batcher.AddSweep(&sweepReq1))
+	err = <-batcherErrChan
+	require.Error(t, err)
+	require.ErrorContains(t, err, "was not accepted by new batch")
+}
+
 // testPresigned_input1_offline_then_input2 tests presigned mode for the
 // following scenario: first input is added, then goes offline, then feerate
 // grows, one of presigned transactions is published, and then another online
@@ -290,10 +358,9 @@ func testPresigned_input1_offline_then_input2(t *testing.T,
 		batcherStore, &dummySweepFetcherMock{},
 		WithCustomFeeRate(customFeeRate),
 		WithPresignedHelper(presignedHelper))
-
-	batcherErrChan := make(chan error)
 	go func() {
-		batcherErrChan <- batcher.Run(ctx)
+		err := batcher.Run(ctx)
+		checkBatcherError(t, err)
 	}()
 
 	setFeeRate(feeRateLow)
@@ -313,35 +380,7 @@ func testPresigned_input1_offline_then_input2(t *testing.T,
 		Notifier: &dummyNotifier,
 	}
 
-	// Make sure that the batcher crashes if AddSweep is called before
-	// PresignSweepsGroup even if the input is online.
-	presignedHelper.SetOutpointOnline(op1, true)
-	require.NoError(t, batcher.AddSweep(&sweepReq1))
-	err = <-batcherErrChan
-	require.Error(t, err)
-	require.ErrorContains(t, err, "was not accepted by new batch")
-
-	// Start the batcher again.
-	batcher = NewBatcher(lnd.WalletKit, lnd.ChainNotifier, lnd.Signer,
-		testMuSig2SignSweep, testVerifySchnorrSig, lnd.ChainParams,
-		batcherStore, &dummySweepFetcherMock{},
-		WithCustomFeeRate(customFeeRate),
-		WithPresignedHelper(presignedHelper))
-	go func() {
-		err := batcher.Run(ctx)
-		checkBatcherError(t, err)
-	}()
-
-	// This should fail, because the input is offline.
-	presignedHelper.SetOutpointOnline(op1, false)
-	err = batcher.PresignSweepsGroup(
-		ctx, []Input{{Outpoint: op1, Value: 1_000_000}},
-		sweepTimeout, destAddr,
-	)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "offline")
-
-	// Enable the input and try again.
+	// Enable the input and presign.
 	presignedHelper.SetOutpointOnline(op1, true)
 	err = batcher.PresignSweepsGroup(
 		ctx, []Input{{Outpoint: op1, Value: 1_000_000}},
@@ -1252,7 +1291,7 @@ func testPresigned_presigned_and_regular_sweeps(t *testing.T, store testStore,
 	}
 	presignedHelper.SetOutpointOnline(op4, true)
 	err = batcher.PresignSweepsGroup(
-		ctx, []Input{{Outpoint: op4, Value: 4_000_000}},
+		ctx, []Input{{Outpoint: op4, Value: 3_000_000}},
 		sweepTimeout, destAddr,
 	)
 	require.NoError(t, err)
@@ -1299,7 +1338,7 @@ func testPresigned_presigned_and_regular_sweeps(t *testing.T, store testStore,
 // is confirmed. Missing sweeps must are added to new batch(es) having valid
 // presigned transactions even if the sweeps are offline at that moment.
 func testPresigned_purging(t *testing.T, numSwaps, numConfirmedSwaps int,
-	batcherStore testBatcherStore) {
+	store testStore, batcherStore testBatcherStore) {
 
 	defer test.Guard(t)()
 
@@ -1357,13 +1396,33 @@ func testPresigned_purging(t *testing.T, numSwaps, numConfirmedSwaps int,
 			}
 		}
 
-		// Enable both sweeps.
+		// Create a swap in DB.
+		swap := &loopdb.LoopOutContract{
+			SwapContract: loopdb.SwapContract{
+				CltvExpiry:      111,
+				AmountRequested: 3_000_000,
+				ProtocolVersion: loopdb.ProtocolVersionMuSig2,
+				HtlcKeys:        htlcKeys,
+
+				// Make preimage unique to pass SQL constraints.
+				Preimage: lntypes.Preimage{byte(i+1)},
+			},
+
+			DestAddr:        destAddr,
+			SwapInvoice:     swapInvoice,
+			SweepConfTarget: 111,
+		}
+		err := store.CreateLoopOut(ctx, swapHash, swap)
+		require.NoError(t, err)
+		store.AssertLoopOutStored()
+
+		// Enable all the sweeps.
 		for _, op := range ops {
 			presignedHelper.SetOutpointOnline(op, true)
 		}
 
 		// An attempt to presign must succeed.
-		err := batcher.PresignSweepsGroup(
+		err = batcher.PresignSweepsGroup(
 			ctx, group, sweepTimeout, destAddr,
 		)
 		require.NoError(t, err)
@@ -1471,6 +1530,10 @@ func TestPresigned(t *testing.T) {
 	logger.SetLevel(btclog.LevelTrace)
 	UseLogger(logger.SubSystem("SWEEP"))
 
+	t.Run("forgotten_presign", func(t *testing.T) {
+		testPresigned_forgotten_presign(t, NewStoreMock())
+	})
+
 	t.Run("input1_offline_then_input2", func(t *testing.T) {
 		testPresigned_input1_offline_then_input2(t, NewStoreMock())
 	})
@@ -1496,24 +1559,28 @@ func TestPresigned(t *testing.T) {
 	})
 
 	t.Run("purging", func(t *testing.T) {
-		t.Run("1 swap, 1 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 1, 1, NewStoreMock())
-		})
-		t.Run("2 swaps, 1 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 2, 1, NewStoreMock())
-		})
-		t.Run("2 swaps, 2 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 2, 2, NewStoreMock())
-		})
-		t.Run("3 swaps, 1 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 3, 1, NewStoreMock())
-		})
-		t.Run("3 swaps, 2 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 3, 2, NewStoreMock())
-		})
-		t.Run("5 swaps, 2 confirmed", func(t *testing.T) {
-			testPresigned_purging(t, 5, 2, NewStoreMock())
-		})
+		testPurging := func(numSwaps, numConfirmedSwaps int) {
+			name := fmt.Sprintf("%d of %d swaps confirmed",
+				numConfirmedSwaps, numSwaps)
+
+			t.Run(name, func(t *testing.T) {
+				runTests(t, func(t *testing.T, store testStore,
+					batcherStore testBatcherStore) {
+
+					testPresigned_purging(
+						t, numSwaps, numConfirmedSwaps,
+						store, batcherStore,
+					)
+				})
+			})
+		}
+
+		testPurging(1, 1)
+		testPurging(2, 1)
+		testPurging(2, 2)
+		testPurging(3, 1)
+		testPurging(3, 2)
+		testPurging(5, 2)
 	})
 
 }

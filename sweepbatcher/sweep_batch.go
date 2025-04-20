@@ -684,6 +684,7 @@ func (b *batch) addSweeps(ctx context.Context, sweeps []*sweep) (bool, error) {
 	// acceptance criteria and is now ready to be added to this batch.
 
 	// For an existing group, update the sweeps in the batch.
+	fmt.Println("addSweeps", numExisting, len(sweeps))
 	if numExisting == len(sweeps) {
 		for _, s := range sweeps {
 			oldSweep, ok := b.sweeps[s.outpoint]

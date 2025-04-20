@@ -671,6 +671,8 @@ func (b *Batcher) PresignSweepsGroup(ctx context.Context, inputs []Input,
 		return fmt.Errorf("presignedHelper is not installed")
 	}
 
+	fmt.Println("PresignSweepsGroup", len(inputs), inputs[0].Outpoint)
+
 	// Find the feerate needed to get into next block. Use conf_target=2,
 	nextBlockFeeRate, err := b.wallet.EstimateFeeRate(ctx, 2)
 	if err != nil {
@@ -690,6 +692,10 @@ func (b *Batcher) PresignSweepsGroup(ctx context.Context, inputs []Input,
 	// The sweeps are ordered inside the group, the first one is the primary
 	// outpoint in the batch.
 	primarySweepID := sweeps[0].outpoint
+
+	for i, s := range sweeps {
+		fmt.Println("PresignSweepsGroup presign", i, s.outpoint, primarySweepID, destAddress, nextBlockFeeRate)
+	}
 
 	return presign(
 		ctx, b.presignedHelper, destAddress, primarySweepID, sweeps,

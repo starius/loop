@@ -73,8 +73,9 @@ func (b *batch) ensurePresigned(ctx context.Context, newSweeps []*sweep,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to find a presigned transaction "+
-			"for feeRate %v, txid of the template is %v: %w",
-			feeRate, tx.TxHash(), err)
+		"for feeRate %v, txid of the template is %v, inputs: %d, "+
+			"outputs: %d: %w", feeRate, tx.TxHash(),
+			len(tx.TxIn), len(tx.TxOut), err)
 	}
 
 	// Check the SignTx worked correctly.
@@ -100,6 +101,9 @@ func (b *batch) getOrderedSweeps(ctx context.Context) ([]sweep, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FetchBatchSweeps(%d) failed: %w", b.id,
 			err)
+	}
+	for i, s := range dbSweeps {
+		fmt.Println("dbSweep", i, s.Outpoint, s.SwapHash)
 	}
 	if len(dbSweeps) != len(utxo2sweep) {
 		return nil, fmt.Errorf("FetchBatchSweeps(%d) returned %d "+
@@ -251,6 +255,7 @@ func (b *batch) presign(ctx context.Context, newSweeps []*sweep) error {
 	// Ensure that a batch spending new sweeps only has been presigned by
 	// PresignSweepsGroup.
 	const allowNonEmptyBatch = true
+	fmt.Println("ensurePresigned", len(newSweeps), newSweeps[0].outpoint)
 	err = b.ensurePresigned(ctx, newSweeps, allowNonEmptyBatch)
 	if err != nil {
 		return fmt.Errorf("new sweeps were not presigned; this means "+
