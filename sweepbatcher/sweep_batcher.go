@@ -756,13 +756,13 @@ func (b *Batcher) handleSweeps(ctx context.Context, sweeps []*sweep,
 		return err
 	}
 
-	infof("Batcher handling sweep %x, presigned=%v, completed=%v",
+	infof("Batcher handling sweep %x, presigned=%v, fully_confirmed=%v",
 		sweep.swapHash[:6], sweep.presigned, completed)
 
 	// If the sweep has already been completed in a confirmed batch then we
 	// can't attach its notifier to the batch as that is no longer running.
 	// Instead we directly detect and return the spend here.
-	if completed && *notifier != (SpendNotifier{}) {
+	if completed {
 		// Verify that the parent batch is confirmed. Note that a batch
 		// is only considered confirmed after it has received three
 		// on-chain confirmations to prevent issues caused by reorgs.
@@ -1063,6 +1063,11 @@ func (b *Batcher) FetchUnconfirmedBatches(ctx context.Context) ([]*batch,
 // SpendNotifier.
 func (b *Batcher) monitorSpendAndNotify(ctx context.Context, sweep *sweep,
 	parentBatchID int32, notifier *SpendNotifier) error {
+
+	// If the caller has not provided a notifier, stop.
+	if notifier == nil || *notifier == (SpendNotifier{}) {
+		return nil
+	}
 
 	spendCtx, cancel := context.WithCancel(ctx)
 
