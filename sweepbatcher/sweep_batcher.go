@@ -276,9 +276,24 @@ type addSweepsRequest struct {
 	parentBatch *dbBatch
 }
 
+// SpendDetail is a notification that is send to the user of sweepbatcher when
+// a batch gets the first confirmation.
 type SpendDetail struct {
 	// Tx is the transaction that spent the outpoint.
 	Tx *wire.MsgTx
+
+	// OnChainFeePortion is the fee portion that was paid to get this sweep
+	// confirmed on chain. This is the difference between the value of the
+	// outpoint and the value of all sweeps that were included in the batch
+	// divided by the number of sweeps.
+	OnChainFeePortion btcutil.Amount
+}
+
+// ConfDetail is a notification that is send to the user of sweepbatcher when
+// a batch is fully confirmed, i.e. gets batchConfHeight confirmations.
+type ConfDetail struct {
+	// TxConfirmation has data about the confirmation of the transaction.
+	*chainntnfs.TxConfirmation
 
 	// OnChainFeePortion is the fee portion that was paid to get this sweep
 	// confirmed on chain. This is the difference between the value of the
@@ -298,7 +313,7 @@ type SpendNotifier struct {
 
 	// ConfChan is a channel where the confirmation details are received.
 	// This channel is optional.
-	ConfChan chan<- *chainntnfs.TxConfirmation
+	ConfChan chan<- *ConfDetail
 
 	// ConfErrChan is a channel where confirmation errors are received.
 	// This channel is optional.
