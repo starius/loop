@@ -992,7 +992,7 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 
 	// Deliver sweep request to batcher.
 	spendChan = make(chan *SpendDetail, 1)
-	confChan := make(chan *chainntnfs.TxConfirmation)
+	confChan := make(chan *ConfDetail)
 	notifier = &SpendNotifier{
 		SpendChan:    spendChan,
 		SpendErrChan: make(chan error, 1),
@@ -1059,6 +1059,7 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 	conf := <-confChan
 	require.Equal(t, uint32(604), conf.BlockHeight)
 	require.Equal(t, spendingTx.TxHash(), conf.Tx.TxHash())
+	require.Equal(t, btcutil.Amount(fee), conf.OnChainFeePortion)
 
 	// Eventually the batch receives the confirmation notification and
 	// confirms itself.
@@ -1074,7 +1075,7 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 	// Now emulate adding the sweep again after it was fully confirmed.
 	// This triggers another code path (monitorSpendAndNotify).
 	spendChan = make(chan *SpendDetail, 1)
-	confChan = make(chan *chainntnfs.TxConfirmation)
+	confChan = make(chan *ConfDetail)
 	notifier = &SpendNotifier{
 		SpendChan:    spendChan,
 		SpendErrChan: make(chan error, 1),
@@ -1106,6 +1107,7 @@ func testSweepBatcherSimpleLifecycle(t *testing.T, store testStore,
 	conf = <-confChan
 	require.Equal(t, uint32(604), conf.BlockHeight)
 	require.Equal(t, spendingTx.TxHash(), conf.Tx.TxHash())
+	require.Equal(t, btcutil.Amount(fee), conf.OnChainFeePortion)
 
 	// Now check what happens in case of a spending error.
 	spendErrChan = make(chan error, 1)

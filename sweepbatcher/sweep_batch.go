@@ -2165,6 +2165,16 @@ func (b *batch) handleConf(ctx context.Context,
 		return fmt.Errorf("failed to store confirmed state: %w", err)
 	}
 
+	// Calculate the fee portion that each sweep should pay for the batch.
+	// TODO: make sure spendTx matches b.sweeps.
+	var totalSweptAmt btcutil.Amount
+	for _, s := range b.sweeps {
+		totalSweptAmt += s.value
+	}
+	feePortionPaidPerSweep, roundingDifference := getFeePortionForSweep(
+		spendTx, len(b.sweeps), totalSweptAmt,
+	)
+
 	// Send the confirmation to all the notifiers.
 	for _, s := range b.sweeps {
 		// If the sweep's notifier is empty then this means that
@@ -2172,6 +2182,14 @@ func (b *batch) handleConf(ctx context.Context,
 		// we can skip the notification part.
 		if s.notifier == nil || s.notifier.ConfChan == nil {
 			continue
+		}
+
+		confDetail := &ConfDetail{
+			TxConfirmation: conf,
+			OnChainFeePortion: getFeePortionPaidBySweep(
+				spendTx, feePortionPaidPerSweep,
+				roundingDifference, &s,
+			),
 		}
 
 		// Notify the caller in a goroutine to avoid possible dead-lock.
@@ -2182,7 +2200,7 @@ func (b *batch) handleConf(ctx context.Context,
 			select {
 			// Try to write the confirmation to the notification
 			// channel.
-			case notifier.ConfChan <- conf:
+			case notifier.ConfChan <- confDetail:
 
 			// If a quit signal was provided by the swap,
 			// continue.
