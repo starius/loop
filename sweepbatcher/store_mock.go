@@ -16,6 +16,7 @@ type StoreMock struct {
 	sweeps  map[wire.OutPoint]dbSweep
 	mu      sync.Mutex
 	sweepID int32
+	batchID int32
 }
 
 // NewStoreMock instantiates a new mock store.
@@ -52,13 +53,8 @@ func (s *StoreMock) InsertSweepBatch(ctx context.Context,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var id int32
-
-	if len(s.batches) == 0 {
-		id = 0
-	} else {
-		id = int32(len(s.batches))
-	}
+	id := s.batchID
+	s.batchID++
 
 	s.batches[id] = *batch
 	return id, nil
