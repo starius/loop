@@ -3,7 +3,6 @@ package sweepbatcher
 import (
 	"context"
 	"database/sql"
-	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -116,19 +115,7 @@ func (s *SQLStore) InsertSweepBatch(ctx context.Context, batch *dbBatch) (int32,
 // DropBatch drops a batch from the database. Note that we only use this call
 // for batches that have no sweeps and so we'd not be able to resume.
 func (s *SQLStore) DropBatch(ctx context.Context, id int32) error {
-	readOpts := loopdb.NewSqlWriteOpts()
-	return s.baseDb.ExecTx(ctx, readOpts, func(tx Querier) error {
-		dbSweeps, err := tx.GetBatchSweeps(ctx, id)
-		if err != nil {
-			return err
-		}
-
-		if len(dbSweeps) != 0 {
-			return fmt.Errorf("cannot drop a non-empty batch")
-		}
-
-		return tx.DropBatch(ctx, id)
-	})
+	return s.baseDb.DropBatch(ctx, id)
 }
 
 // UpdateSweepBatch updates a batch in the database.
