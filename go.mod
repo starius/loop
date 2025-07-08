@@ -19,7 +19,7 @@ require (
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lib/pq v1.10.9
 	github.com/lightninglabs/aperture v0.3.13-beta
-	github.com/lightninglabs/lndclient v0.19.0-7
+	github.com/lightninglabs/lndclient v0.19.0-12
 	github.com/lightninglabs/loop/looprpc v1.0.7
 	github.com/lightninglabs/loop/swapserverrpc v1.0.14
 	github.com/lightninglabs/taproot-assets v0.6.0-rc2.0.20250526132410-324bce0a1a7b
