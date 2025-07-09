@@ -596,17 +596,18 @@ func (s *loopOutSwap) executeSwap(globalCtx context.Context) error {
 		return nil
 	}
 
-	// Try to spend htlc and continue (rbf) until a spend has confirmed.
-	spend, err := s.waitForHtlcSpendConfirmedV2(
+	// Try to spend htlc and continue (rbf) until a spend has fully
+	// confirmed.
+	conf, err := s.waitForHtlcSpendConfirmedV2(
 		globalCtx, *htlcOutpoint, htlcValue,
 	)
 	if err != nil {
 		return err
 	}
 
-	// If spend details are nil, we resolved the swap without waiting for
-	// its spend, so we can exit.
-	if spend == nil {
+	// If conf details are nil, we resolved the swap without waiting for
+	// its confirmation, so we can exit.
+	if conf == nil {
 		return nil
 	}
 
@@ -614,7 +615,7 @@ func (s *loopOutSwap) executeSwap(globalCtx context.Context) error {
 	// don't just try to match with the hash of our sweep tx, because it
 	// may be swept by a different (fee) sweep tx from a previous run.
 	htlcInput, err := swap.GetTxInputByOutpoint(
-		spend.Tx, htlcOutpoint,
+		conf.Tx, htlcOutpoint,
 	)
 	if err != nil {
 		return err
@@ -622,7 +623,7 @@ func (s *loopOutSwap) executeSwap(globalCtx context.Context) error {
 
 	sweepSuccessful := s.htlc.IsSuccessWitness(htlcInput.Witness)
 	if sweepSuccessful {
-		s.cost.Onchain = spend.OnChainFeePortion
+		s.cost.Onchain = conf.OnChainFeePortion
 		s.state = loopdb.StateSuccess
 	} else {
 		s.state = loopdb.StateFailSweepTimeout
@@ -1140,10 +1141,12 @@ func (s *loopOutSwap) waitForConfirmedHtlc(globalCtx context.Context) (
 // sweep or a server revocation tx.
 func (s *loopOutSwap) waitForHtlcSpendConfirmedV2(globalCtx context.Context,
 	htlcOutpoint wire.OutPoint, htlcValue btcutil.Amount) (
-	*sweepbatcher.SpendDetail, error) {
+	*sweepbatcher.ConfDetail, error) {
 
 	spendChan := make(chan *sweepbatcher.SpendDetail)
 	spendErrChan := make(chan error, 1)
+	confChan := make(chan *sweepbatcher.ConfDetail, 1)
+	confErrChan := make(chan error, 1)
 	quitChan := make(chan bool, 1)
 
 	defer func() {
@@ -1153,6 +1156,8 @@ func (s *loopOutSwap) waitForHtlcSpendConfirmedV2(globalCtx context.Context,
 	notifier := sweepbatcher.SpendNotifier{
 		SpendChan:    spendChan,
 		SpendErrChan: spendErrChan,
+		ConfChan:     confChan,
+		ConfErrChan:  confErrChan,
 		QuitChan:     quitChan,
 	}
 
@@ -1192,15 +1197,28 @@ func (s *loopOutSwap) waitForHtlcSpendConfirmedV2(globalCtx context.Context,
 
 	for {
 		select {
-		// Htlc spend, break loop.
+		// Htlc spend, but waiting for more confirmations in case of
+		// a reorg.
 		case spend := <-spendChan:
 			s.log.Infof("Htlc spend by tx: %v", spend.Tx.TxHash())
 
-			return spend, nil
-
 		// Spend notification error.
 		case err := <-spendErrChan:
-			return nil, err
+			return nil, fmt.Errorf("spend notification error: %w",
+				err)
+
+		// Htlc was spent and the sweep transaction is fully confirmed.
+		// Break from loop.
+		case conf := <-confChan:
+			s.log.Infof("Sweep tx %v fully confirmed in block %d",
+				conf.Tx.TxHash(), conf.BlockHeight)
+
+			return conf, nil
+
+		// Conf notification error.
+		case err := <-confErrChan:
+			return nil, fmt.Errorf("conf notification error: %w",
+				err)
 
 		// Receive status updates for our payment so that we can detect
 		// whether we've successfully pushed our preimage.

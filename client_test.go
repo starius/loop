@@ -411,6 +411,8 @@ func testLoopOutSuccess(ctx *testContext, amt btcutil.Amount, hash lntypes.Hash,
 
 	ctx.AssertRegisterConf(true, 3)
 
+	ctx.NotifyConf(sweepTx)
+
 	ctx.assertStatus(loopdb.StateSuccess)
 
 	ctx.assertStoreFinished(loopdb.StateSuccess)

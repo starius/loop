@@ -472,6 +472,9 @@ func testCustomSweepConfTarget(t *testing.T) {
 	// confirmations.
 	ctx.AssertRegisterConf(true, 3)
 
+	// Notify the batch for the confirmation.
+	ctx.NotifyConf(sweepTx)
+
 	cfg.store.(*loopdb.StoreMock).AssertLoopOutState(loopdb.StateSuccess)
 	status = <-statusChan
 	require.Equal(t, loopdb.StateSuccess, status.State)
@@ -746,6 +749,9 @@ func testPreimagePush(t *testing.T) {
 	// After receiving the spend ntfn the batch will start monitoring for
 	// confs.
 	ctx.AssertRegisterConf(true, 3)
+
+	// Notify the batch for the confirmation.
+	ctx.NotifyConf(sweepTx)
 
 	cfg.store.(*loopdb.StoreMock).AssertLoopOutState(loopdb.StateSuccess)
 	status := <-statusChan
@@ -1104,6 +1110,9 @@ func TestLoopOutMuSig2Sweep(t *testing.T) {
 	// After receiving the spend ntfn the batch will start monitoring for
 	// confs.
 	ctx.AssertRegisterConf(true, 3)
+
+	// Notify the batch for the confirmation.
+	ctx.NotifyConf(sweepTx)
 
 	cfg.store.(*loopdb.StoreMock).AssertLoopOutState(loopdb.StateSuccess)
 	status = <-statusChan
