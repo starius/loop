@@ -94,7 +94,6 @@ var (
 )
 
 const (
-
 	// satAmtFmt formats a satoshi value into a one line string, intended to
 	// prettify the terminal output. For Instance,
 	// 	fmt.Printf(f, "Estimated on-chain fee:", fee)
@@ -163,9 +162,10 @@ func fatal(err error) {
 
 func main() {
 	rootCmd := &cli.Command{
-		Name:    "loop",
-		Usage:   "control plane for your loopd",
-		Version: loop.RichVersion(),
+		Name:                  "loop",
+		Usage:                 "control plane for your loopd",
+		Version:               loop.RichVersion(),
+		EnableShellCompletion: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "rpcserver",

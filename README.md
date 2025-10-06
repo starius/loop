@@ -65,7 +65,8 @@ loop in <amt_in_satoshis>
 ```
 
 ### More info
-For more information about using Loop checkout our [Loop FAQs](./docs/faqs.md).
+- [Loop FAQs](./docs/faqs.md)
+- [Shell completion guide](./docs/shell_completion.md)
 
 ## Development
 
