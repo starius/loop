@@ -1,0 +1,62 @@
+{
+  "metadata": {
+    "args": [
+      "loop",
+      "static",
+      "new"
+    ],
+    "env": {
+      "LOOPCLI_NETWORK": "regtest",
+      "LOOPCLI_RPCSERVER": "127.0.0.1:11010"
+    },
+    "start_time": "2025-10-08T02:01:43.14603441-03:00",
+    "work_dir": "/home/user/loop",
+    "version": "0.31.2-beta commit=looprpc/v1.0.9-60-g018a6194a2d034cfd8e483b92e28f5f6269b1653-dirty commit_hash=018a6194a2d034cfd8e483b92e28f5f6269b1653",
+    "failed": true,
+    "duration": 4114163417
+  },
+  "events": [
+    {
+      "time_ms": 0,
+      "kind": "stdout",
+      "data": {
+        "text": "\nWARNING: Be aware that loosing your l402.token file in .loop under your home directory will take your ability to spend funds sent to the static address via loop-ins or withdrawals. You will have to wait until the deposit expires and your loop client sweeps the funds back to your lnd wallet. The deposit expiry could be months in the future.\n"
+      }
+    },
+    {
+      "time_ms": 0,
+      "kind": "stdout",
+      "data": {
+        "text": "\nCONTINUE WITH NEW ADDRESS? (y/n): "
+      }
+    },
+    {
+      "time_ms": 4114,
+      "kind": "stdin",
+      "data": {
+        "text": "n"
+      }
+    },
+    {
+      "time_ms": 4114,
+      "kind": "stdin",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "time_ms": 4114,
+      "kind": "stderr",
+      "data": {
+        "text": "[loop] new address creation canceled\n"
+      }
+    },
+    {
+      "time_ms": 4114,
+      "kind": "exit",
+      "data": {
+        "failed": true
+      }
+    }
+  ]
+}
