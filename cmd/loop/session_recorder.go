@@ -149,7 +149,7 @@ func (r *sessionRecorder) resolveFilePath(dest string) (string, error) {
 		if slug == "" {
 			slug = "session"
 		}
-		dest = fmt.Sprintf("%s-%s%s", slug, timestamp, sessionFileExt)
+		dest = fmt.Sprintf("session-%s-%s%s", timestamp, slug, sessionFileExt)
 	}
 
 	if filepath.Ext(dest) == "" {
