@@ -90,8 +90,17 @@ var (
 		setLiquidityRuleCommand, suggestSwapCommand, setParamsCommand,
 		getInfoCommand, abandonSwapCommand, reservationsCommands,
 		instantOutCommand, listInstantOutsCommand, stopCommand,
-		printManCommand, printMarkdownCommand,
+		printManCommand, printMarkdownCommand, sessionCommand,
 	}
+
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
+
+	sessionRec *sessionRecorder
+
+	// forceDeterministicJSON is enabled by tests to obtain stable JSON output.
+	forceDeterministicJSON bool
+
+	clientDialer clientConnDialer = &grpcDialer{}
 )
 
 const (
@@ -144,26 +153,67 @@ func printJSON(resp interface{}) {
 		fatal(err)
 	}
 	out.WriteString("\n")
-	_, _ = out.WriteTo(os.Stdout)
+	printBytes := maybeNormalizeJSON(out.Bytes())
+	if _, err := term.Write(printBytes); err != nil {
+		fatal(err)
+	}
 }
 
 func printRespJSON(resp proto.Message) {
 	jsonBytes, err := lnrpc.ProtoJSONMarshalOpts.Marshal(resp)
 	if err != nil {
-		fmt.Println("unable to decode response: ", err)
+		term.Println("unable to decode response: ", err)
 		return
 	}
 
-	fmt.Println(string(jsonBytes))
+	term.Println(string(maybeNormalizeJSON(jsonBytes)))
 }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "[loop] %v\n", err)
+	term.Errorf("[loop] %v\n", err)
+	if sessionRec != nil {
+		if finalizeErr := sessionRec.Finalize(err); finalizeErr != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", finalizeErr)
+		}
+	}
 	os.Exit(1)
 }
 
 func main() {
-	rootCmd := &cli.Command{
+	var err error
+	sessionRec, err = newSessionRecorder(os.Args)
+	if err != nil {
+		fatal(err)
+	}
+
+	if sessionRec != nil {
+		if err := sessionRec.Start(nil, nil, nil); err != nil {
+			fatal(err)
+		}
+	}
+
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
+
+	rootCmd := newRootCommand()
+
+	ctx := context.Background()
+	if sessionRec != nil {
+		ctx = sessionRec.InjectContext(ctx)
+	}
+
+	if err := rootCmd.Run(ctx, os.Args); err != nil {
+		fatal(err)
+	}
+
+	if sessionRec != nil {
+		if err := sessionRec.Finalize(nil); err != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", err)
+		}
+	}
+}
+
+func newRootCommand() *cli.Command {
+	return &cli.Command{
 		Name:    "loop",
 		Usage:   "control plane for your loopd",
 		Version: loop.RichVersion(),
@@ -184,43 +234,87 @@ func main() {
 			return cli.ShowRootCommandHelp(cmd)
 		},
 	}
-
-	if err := rootCmd.Run(context.Background(), os.Args); err != nil {
-		fatal(err)
-	}
 }
 
 // getClient establishes a SwapClient RPC connection and returns the client and
 // a cleanup handler.
-func getClient(cmd *cli.Command) (looprpc.SwapClientClient,
-	func(), error) {
-
-	client, _, cleanup, err := getClientWithConn(cmd)
+func getClient(ctx context.Context, cmd *cli.Command) (looprpc.SwapClientClient, func(), error) {
+	conn, cleanup, err := clientDialer.Dial(ctx, cmd)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return client, cleanup, nil
+	loopClient := looprpc.NewSwapClientClient(conn)
+	return loopClient, cleanup, nil
 }
 
 // getClientWithConn returns both the SwapClient RPC client and the underlying
 // gRPC connection so callers can perform connection-aware actions.
-func getClientWithConn(cmd *cli.Command) (looprpc.SwapClientClient,
+func getClientWithConn(ctx context.Context, cmd *cli.Command) (looprpc.SwapClientClient,
 	*grpc.ClientConn, func(), error) {
 
+	conn, cleanup, err := clientDialer.Dial(ctx, cmd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	grpcConn, ok := conn.(*grpc.ClientConn)
+	if !ok {
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("unexpected client connection type %T", conn)
+	}
+
+	loopClient := looprpc.NewSwapClientClient(conn)
+	return loopClient, grpcConn, cleanup, nil
+}
+
+type clientConnDialer interface {
+	Dial(ctx context.Context, cmd *cli.Command) (grpc.ClientConnInterface, func(), error)
+}
+
+type grpcDialer struct{}
+
+func (d *grpcDialer) Dial(ctx context.Context, cmd *cli.Command) (grpc.ClientConnInterface, func(), error) {
 	rpcServer := cmd.String("rpcserver")
 	tlsCertPath, macaroonPath, err := extractPathArgs(cmd)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	conn, err := getClientConn(rpcServer, tlsCertPath, macaroonPath)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cleanup := func() { conn.Close() }
 
-	loopClient := looprpc.NewSwapClientClient(conn)
-	return loopClient, conn, cleanup, nil
+	return getClientConn(ctx, rpcServer, tlsCertPath, macaroonPath)
+}
+
+func withClientDialer(d clientConnDialer) func() {
+	prev := clientDialer
+	clientDialer = d
+	return func() { clientDialer = prev }
+}
+
+// maybeNormalizeJSON rewrites JSON output to avoid the build-dependent spacing
+// introduced by google.golang.org/protobuf/internal/encoding/json (see
+// WriteName in protobuf-go-hex-display/internal/encoding/json/encode.go, which
+// uses internal/detrand.Bool). When recording or replaying sessions we ensure
+// stable output by re-encoding with the standard library.
+func maybeNormalizeJSON(raw []byte) []byte {
+	if sessionRec == nil && !forceDeterministicJSON {
+		return raw
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return raw
+	}
+
+	normalized, err := json.MarshalIndent(parsed, "", "    ")
+	if err != nil {
+		return raw
+	}
+
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		normalized = append(normalized, '\n')
+	}
+
+	return normalized
 }
 
 func getMaxRoutingFee(amt btcutil.Amount) btcutil.Amount {
@@ -323,24 +417,24 @@ func displayInDetails(req *looprpc.QuoteRequest,
 	resp *looprpc.InQuoteResponse, verbose bool) error {
 
 	if req.ExternalHtlc {
-		fmt.Printf("On-chain fee for external loop in is not " +
+		term.Printf("On-chain fee for external loop in is not " +
 			"included.\nSufficient fees will need to be paid " +
 			"when constructing the transaction in the external " +
 			"wallet.\n\n")
 	}
 
 	if req.DepositOutpoints != nil {
-		fmt.Printf("On-chain fees for static address loop-ins are not " +
+		term.Printf("On-chain fees for static address loop-ins are not " +
 			"included.\nThey were already paid when the deposits " +
 			"were created.\n\n")
 	}
 
 	printQuoteInResp(req, resp, verbose)
 
-	fmt.Printf("\nCONTINUE SWAP? (y/n): ")
+	term.Printf("\nCONTINUE SWAP? (y/n): ")
 
 	var answer string
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 	if answer == "y" {
 		return nil
 	}
@@ -424,21 +518,21 @@ func logSwap(swap *looprpc.SwapStatus) {
 		swap.State != looprpc.SwapState_HTLC_PUBLISHED &&
 		swap.State != looprpc.SwapState_PREIMAGE_REVEALED {
 
-		fmt.Printf(" (cost: server %v, onchain %v, offchain %v)",
+		term.Printf(" (cost: server %v, onchain %v, offchain %v)",
 			swap.CostServer, swap.CostOnchain, swap.CostOffchain,
 		)
 	}
 
-	fmt.Println()
+	term.Println()
 }
 
-func getClientConn(address, tlsCertPath, macaroonPath string) (*grpc.ClientConn,
-	error) {
+func getClientConn(_ context.Context, address, tlsCertPath, macaroonPath string) (grpc.ClientConnInterface,
+	func(), error) {
 
 	// We always need to send a macaroon.
 	macOption, err := readMacaroon(macaroonPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	opts := []grpc.DialOption{
@@ -446,21 +540,34 @@ func getClientConn(address, tlsCertPath, macaroonPath string) (*grpc.ClientConn,
 		macOption,
 	}
 
-	// Since TLS cannot be disabled, we'll always have a cert file to read.
+	if sessionRec != nil {
+		if unary := sessionRec.UnaryInterceptor(); unary != nil {
+			opts = append(opts, grpc.WithChainUnaryInterceptor(unary))
+		}
+		if stream := sessionRec.StreamInterceptor(); stream != nil {
+			opts = append(opts, grpc.WithChainStreamInterceptor(stream))
+		}
+	}
+
+	// TLS cannot be disabled, we'll always have a cert file to read.
 	creds, err := credentials.NewClientTLSFromFile(tlsCertPath, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	opts = append(opts, grpc.WithTransportCredentials(creds))
 
 	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create RPC client: %v",
+		return nil, nil, fmt.Errorf("unable to connect to RPC server: %v",
 			err)
 	}
 
-	return conn, nil
+	cleanup := func() {
+		_ = conn.Close()
+	}
+
+	return conn, cleanup, nil
 }
 
 // readMacaroon tries to read the macaroon file at the specified path and create
