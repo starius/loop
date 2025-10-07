@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -123,10 +121,9 @@ func quoteIn(ctx context.Context, cmd *cli.Command) error {
 	// don't want to fail the quote. But the user should still be informed
 	// why the fee shows as -1.
 	if quoteResp.HtlcPublishFeeSat == int64(loop.MinerFeeEstimationFailed) {
-		_, _ = fmt.Fprintf(os.Stderr, "Warning: Miner fee estimation "+
-			"not possible, lnd has insufficient funds to "+
-			"create a sample transaction for selected "+
-			"amount.\n")
+		term.Errorf("Warning: Miner fee estimation not possible, " +
+			"lnd has insufficient funds to create a sample " +
+			"transaction for selected amount.\n")
 	}
 
 	// If the user specified static address deposits, we quoted for their
@@ -232,41 +229,41 @@ func printQuoteInResp(req *looprpc.QuoteRequest,
 
 	if req.DepositOutpoints != nil {
 		if req.Amt == 0 {
-			fmt.Printf(satAmtFmt, "Previously deposited "+
+			term.Printf(satAmtFmt, "Previously deposited "+
 				"on-chain:", resp.QuotedAmt)
 		} else {
-			fmt.Printf(satAmtFmt, "Previously deposited "+
+			term.Printf(satAmtFmt, "Previously deposited "+
 				"on-chain:", req.Amt)
 		}
 	} else {
-		fmt.Printf(satAmtFmt, "Send on-chain:", req.Amt)
+		term.Printf(satAmtFmt, "Send on-chain:", req.Amt)
 	}
-	fmt.Printf(satAmtFmt, "Receive off-chain:", req.Amt-totalFee)
+	term.Printf(satAmtFmt, "Receive off-chain:", req.Amt-totalFee)
 
 	switch {
 	case req.ExternalHtlc && !verbose:
 		// If it's external then we don't know the miner fee hence the
 		// total cost.
-		fmt.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
+		term.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
 
 	case req.ExternalHtlc && verbose:
-		fmt.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
-		fmt.Println()
-		fmt.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
+		term.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
+		term.Println()
+		term.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
 
 	case verbose:
-		fmt.Println()
-		fmt.Printf(
+		term.Println()
+		term.Printf(
 			satAmtFmt, "Estimated on-chain fee:",
 			resp.HtlcPublishFeeSat,
 		)
-		fmt.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
-		fmt.Printf(satAmtFmt, "Estimated total fee:", totalFee)
-		fmt.Println()
-		fmt.Printf(blkFmt, "Conf target:", resp.ConfTarget)
-		fmt.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
+		term.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
+		term.Printf(satAmtFmt, "Estimated total fee:", totalFee)
+		term.Println()
+		term.Printf(blkFmt, "Conf target:", resp.ConfTarget)
+		term.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
 	default:
-		fmt.Printf(satAmtFmt, "Estimated total fee:", totalFee)
+		term.Printf(satAmtFmt, "Estimated total fee:", totalFee)
 	}
 }
 
@@ -280,54 +277,54 @@ func printQuoteOutResp(req *looprpc.QuoteRequest,
 			req.Amt, resp.AssetRfqInfo.SwapAssetRate,
 		)
 		if err != nil {
-			fmt.Printf("Error converting asset amount: %v\n", err)
+			term.Printf("Error converting asset amount: %v\n", err)
 			return
 		}
 		exchangeRate := float64(assetAmtSwap) / float64(req.Amt)
-		fmt.Printf(assetAmtFmt, "Send off-chain:",
+		term.Printf(assetAmtFmt, "Send off-chain:",
 			assetAmtSwap, resp.AssetRfqInfo.AssetName)
-		fmt.Printf(rateFmt, "Exchange rate:",
+		term.Printf(rateFmt, "Exchange rate:",
 			exchangeRate, resp.AssetRfqInfo.AssetName)
-		fmt.Printf(assetAmtFmt, "Limit Send off-chain:",
+		term.Printf(assetAmtFmt, "Limit Send off-chain:",
 			resp.AssetRfqInfo.MaxSwapAssetAmt,
 			resp.AssetRfqInfo.AssetName)
 	} else {
-		fmt.Printf(satAmtFmt, "Send off-chain:", req.Amt)
+		term.Printf(satAmtFmt, "Send off-chain:", req.Amt)
 	}
 
-	fmt.Printf(satAmtFmt, "Receive on-chain:", req.Amt-totalFee)
+	term.Printf(satAmtFmt, "Receive on-chain:", req.Amt-totalFee)
 
 	if !verbose {
-		fmt.Printf(satAmtFmt, "Estimated total fee:", totalFee)
+		term.Printf(satAmtFmt, "Estimated total fee:", totalFee)
 		return
 	}
 
-	fmt.Println()
-	fmt.Printf(satAmtFmt, "Estimated on-chain fee:", resp.HtlcSweepFeeSat)
-	fmt.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
-	fmt.Printf(satAmtFmt, "Estimated total fee:", totalFee)
-	fmt.Println()
+	term.Println()
+	term.Printf(satAmtFmt, "Estimated on-chain fee:", resp.HtlcSweepFeeSat)
+	term.Printf(satAmtFmt, "Loop service fee:", resp.SwapFeeSat)
+	term.Printf(satAmtFmt, "Estimated total fee:", totalFee)
+	term.Println()
 	if resp.AssetRfqInfo != nil {
 		assetAmtPrepay, err := getAssetAmt(
 			resp.PrepayAmtSat, resp.AssetRfqInfo.PrepayAssetRate,
 		)
 		if err != nil {
-			fmt.Printf("Error converting asset amount: %v\n", err)
+			term.Printf("Error converting asset amount: %v\n", err)
 			return
 		}
-		fmt.Printf(assetAmtFmt, "No show penalty (prepay):",
+		term.Printf(assetAmtFmt, "No show penalty (prepay):",
 			assetAmtPrepay,
 			resp.AssetRfqInfo.AssetName)
-		fmt.Printf(assetAmtFmt, "Limit no show penalty (prepay):",
+		term.Printf(assetAmtFmt, "Limit no show penalty (prepay):",
 			resp.AssetRfqInfo.MaxPrepayAssetAmt,
 			resp.AssetRfqInfo.AssetName)
 	} else {
-		fmt.Printf(satAmtFmt, "No show penalty (prepay):",
+		term.Printf(satAmtFmt, "No show penalty (prepay):",
 			resp.PrepayAmtSat)
 	}
-	fmt.Printf(blkFmt, "Conf target:", resp.ConfTarget)
-	fmt.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
-	fmt.Printf("%-38s %s\n",
+	term.Printf(blkFmt, "Conf target:", resp.ConfTarget)
+	term.Printf(blkFmt, "CLTV expiry delta:", resp.CltvDelta)
+	term.Printf("%-38s %s\n",
 		"Publication deadline:",
 		time.Unix(int64(req.SwapPublicationDeadline), 0),
 	)

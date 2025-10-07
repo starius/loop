@@ -28,7 +28,7 @@ func monitor(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	fmt.Printf("Note: offchain cost may report as 0 after loopd restart " +
+	term.Printf("Note: offchain cost may report as 0 after loopd restart " +
 		"during swap\n")
 
 	for {

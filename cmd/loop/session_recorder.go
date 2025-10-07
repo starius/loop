@@ -1,0 +1,404 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/lightninglabs/loop"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	sessionEnvVar     = "LOOP_SESSION_RECORD"
+	sessionDefaultDir = "cmd/loop/testdata/sessions"
+	sessionFileExt    = ".json"
+	eventStdout       = "stdout"
+	eventStderr       = "stderr"
+	eventStdin        = "stdin"
+	eventGrpc         = "grpc"
+	eventExit         = "exit"
+)
+
+type sessionRecorder struct {
+	mu       sync.Mutex
+	started  time.Time
+	filePath string
+
+	metadata sessionMetadata
+	events   []sessionEvent
+
+	finalizeOnce sync.Once
+	finalized    bool
+
+	marshalOptions protojson.MarshalOptions
+}
+
+type sessionMetadata struct {
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	StartTime time.Time         `json:"start_time"`
+	WorkDir   string            `json:"work_dir"`
+	Version   string            `json:"version"`
+	ExitCode  *int              `json:"exit_code,omitempty"`
+	Duration  *time.Duration    `json:"duration,omitempty"`
+}
+
+type sessionEvent struct {
+	TimeMS int64           `json:"time_ms"`
+	Kind   string          `json:"kind"`
+	Data   json.RawMessage `json:"data"`
+}
+
+type textPayload struct {
+	Text string `json:"text"`
+}
+
+type stdinPayload struct {
+	Text string `json:"text"`
+}
+
+type grpcPayload struct {
+	Method      string          `json:"method"`
+	Event       string          `json:"event"`
+	MessageType string          `json:"message_type,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Error       string          `json:"error,omitempty"`
+}
+
+type exitPayload struct {
+	Code int `json:"code"`
+}
+
+func newSessionRecorder(args []string) (*sessionRecorder, error) {
+	destination := os.Getenv(sessionEnvVar)
+	if destination == "" {
+		return nil, nil
+	}
+
+	recorder := &sessionRecorder{
+		started: time.Now(),
+		marshalOptions: protojson.MarshalOptions{
+			UseProtoNames:   true,
+			EmitUnpopulated: true,
+		},
+	}
+
+	metadata := sessionMetadata{
+		Args:      append([]string(nil), args...),
+		Env:       collectSessionEnv(),
+		StartTime: recorder.started,
+		WorkDir:   getWorkingDir(),
+		Version:   loop.RichVersion(),
+	}
+	recorder.metadata = metadata
+
+	filePath, err := recorder.resolveFilePath(destination)
+	if err != nil {
+		return nil, err
+	}
+	recorder.filePath = filePath
+
+	return recorder, nil
+}
+
+func collectSessionEnv() map[string]string {
+	env := make(map[string]string)
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		value := parts[1]
+		if key == sessionEnvVar {
+			continue
+		}
+		if strings.HasPrefix(key, "LOOPCLI_") || strings.HasPrefix(key, "LOOP_") {
+			env[key] = value
+		}
+	}
+	return env
+}
+
+func getWorkingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
+func (r *sessionRecorder) resolveFilePath(dest string) (string, error) {
+	if dest == "auto" || dest == "" {
+		timestamp := r.started.Format("20060102-150405")
+		dest = fmt.Sprintf("session-%s%s", timestamp, sessionFileExt)
+	}
+
+	if filepath.Ext(dest) == "" {
+		dest += sessionFileExt
+	}
+
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(sessionDefaultDir, dest)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", err
+	}
+
+	return dest, nil
+}
+
+func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
+	if r == nil {
+		return
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	event := sessionEvent{
+		TimeMS: time.Since(r.started).Milliseconds(),
+		Kind:   kind,
+		Data:   data,
+	}
+
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *sessionRecorder) WrapWriter(kind string, writer io.Writer) io.Writer {
+	if r == nil {
+		return writer
+	}
+
+	return &recordingWriter{
+		recorder: r,
+		kind:     kind,
+		inner:    writer,
+	}
+}
+
+func (r *sessionRecorder) WrapReader(kind string, reader io.Reader) io.Reader {
+	if r == nil {
+		return reader
+	}
+
+	return &recordingReader{
+		recorder: r,
+		kind:     kind,
+		inner:    reader,
+	}
+}
+
+type recordingWriter struct {
+	recorder *sessionRecorder
+	kind     string
+	inner    io.Writer
+}
+
+func (w *recordingWriter) Write(p []byte) (int, error) {
+	n, err := w.inner.Write(p)
+	if n > 0 {
+		payload := textPayload{Text: string(p[:n])}
+		w.recorder.logEvent(w.kind, payload)
+	}
+	return n, err
+}
+
+type recordingReader struct {
+	recorder *sessionRecorder
+	kind     string
+	inner    io.Reader
+}
+
+func (rdr *recordingReader) Read(p []byte) (int, error) {
+	n, err := rdr.inner.Read(p)
+	if n > 0 {
+		rdr.recorder.logEvent(rdr.kind, stdinPayload{Text: string(p[:n])})
+	}
+	return n, err
+}
+
+func (r *sessionRecorder) logExit(code int) {
+	if r == nil {
+		return
+	}
+
+	r.logEvent(eventExit, exitPayload{Code: code})
+
+	duration := time.Since(r.started)
+	r.mu.Lock()
+	r.metadata.ExitCode = &code
+	r.metadata.Duration = &duration
+	r.mu.Unlock()
+}
+
+func (r *sessionRecorder) finalize(code int) error {
+	if r == nil {
+		return nil
+	}
+
+	var finalizeErr error
+	r.finalizeOnce.Do(func() {
+		r.logExit(code)
+
+		r.mu.Lock()
+		metadata := r.metadata
+		events := append([]sessionEvent(nil), r.events...)
+		r.mu.Unlock()
+
+		fileContent := struct {
+			Metadata sessionMetadata `json:"metadata"`
+			Events   []sessionEvent  `json:"events"`
+		}{
+			Metadata: metadata,
+			Events:   events,
+		}
+
+		file, err := os.Create(r.filePath)
+		if err != nil {
+			finalizeErr = err
+			return
+		}
+		defer file.Close()
+
+		encoder := json.NewEncoder(file)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(fileContent); err != nil {
+			finalizeErr = err
+			return
+		}
+	})
+
+	return finalizeErr
+}
+
+func (r *sessionRecorder) FinalizeSuccess() error {
+	return r.finalize(0)
+}
+
+func (r *sessionRecorder) FinalizeError() error {
+	return r.finalize(1)
+}
+
+func (r *sessionRecorder) Finalize(code int) error {
+	return r.finalize(code)
+}
+
+func (r *sessionRecorder) UnaryInterceptor() grpc.UnaryClientInterceptor {
+	if r == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		r.logGRPCMessage(method, "request", req, nil)
+
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		if err != nil {
+			r.logGRPCMessage(method, "error", nil, err)
+			return err
+		}
+
+		r.logGRPCMessage(method, "response", reply, nil)
+		return nil
+	}
+}
+
+func (r *sessionRecorder) StreamInterceptor() grpc.StreamClientInterceptor {
+	if r == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		clientStream, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			r.logGRPCMessage(method, "error", nil, err)
+			return nil, err
+		}
+
+		return &recordingClientStream{
+			ClientStream: clientStream,
+			recorder:     r,
+			method:       method,
+		}, nil
+	}
+}
+
+type recordingClientStream struct {
+	grpc.ClientStream
+	recorder *sessionRecorder
+	method   string
+}
+
+func (s *recordingClientStream) SendMsg(m interface{}) error {
+	s.recorder.logGRPCMessage(s.method, "send", m, nil)
+	err := s.ClientStream.SendMsg(m)
+	if err != nil {
+		s.recorder.logGRPCMessage(s.method, "error", nil, err)
+	}
+	return err
+}
+
+func (s *recordingClientStream) RecvMsg(m interface{}) error {
+	err := s.ClientStream.RecvMsg(m)
+	if err != nil {
+		s.recorder.logGRPCMessage(s.method, "error", nil, err)
+		return err
+	}
+
+	s.recorder.logGRPCMessage(s.method, "recv", m, nil)
+	return nil
+}
+
+func (r *sessionRecorder) logGRPCMessage(method, event string, msg interface{}, receptionErr error) {
+	if r == nil {
+		return
+	}
+
+	payload := grpcPayload{Method: method, Event: event}
+
+	if receptionErr != nil {
+		payload.Error = receptionErr.Error()
+		r.logEvent(eventGrpc, payload)
+		return
+	}
+
+	if msg != nil {
+		if protoMsg, ok := msg.(proto.Message); ok {
+			payload.MessageType = string(proto.MessageName(protoMsg))
+			data, err := r.marshalOptions.Marshal(protoMsg)
+			if err == nil {
+				payload.Payload = data
+			}
+		} else {
+			data, err := json.Marshal(msg)
+			if err == nil {
+				payload.Payload = data
+			}
+		}
+	}
+
+	r.logEvent(eventGrpc, payload)
+}
+
+func (r *sessionRecorder) InjectContext(ctx context.Context) context.Context {
+	if r == nil {
+		return ctx
+	}
+
+	return metadata.AppendToOutgoingContext(ctx, "loop-session", filepath.Base(r.filePath))
+}

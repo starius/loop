@@ -38,7 +38,7 @@ func printMan(_ context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to produce man: %w", err)
 	}
 
-	fmt.Println(man)
+	term.Println(man)
 
 	return nil
 }
@@ -59,7 +59,7 @@ func printMarkdown(_ context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to produce man: %w", err)
 	}
 
-	fmt.Println(md)
+	term.Println(md)
 
 	return nil
 }

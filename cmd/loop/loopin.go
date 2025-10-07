@@ -206,21 +206,21 @@ func loopIn(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	fmt.Printf("Swap initiated\n")
-	fmt.Printf("ID:           %v\n", resp.Id)
+	term.Printf("Swap initiated\n")
+	term.Printf("ID:           %v\n", resp.Id)
 
 	if resp.HtlcAddressP2Tr != "" {
-		fmt.Printf("HTLC address (P2TR): %v\n", resp.HtlcAddressP2Tr)
+		term.Printf("HTLC address (P2TR): %v\n", resp.HtlcAddressP2Tr)
 	} else {
-		fmt.Printf("HTLC address (P2WSH): %v\n", resp.HtlcAddressP2Wsh)
+		term.Printf("HTLC address (P2WSH): %v\n", resp.HtlcAddressP2Wsh)
 	}
 
 	if resp.ServerMessage != "" {
-		fmt.Printf("Server message: %v\n", resp.ServerMessage)
+		term.Printf("Server message: %v\n", resp.ServerMessage)
 	}
 
-	fmt.Println()
-	fmt.Printf("Run `loop monitor` to monitor progress.\n")
+	term.Println()
+	term.Printf("Run `loop monitor` to monitor progress.\n")
 
 	return nil
 }

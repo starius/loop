@@ -675,7 +675,7 @@ func depositsToOutpoints(deposits []*looprpc.Deposit) []string {
 }
 
 func displayNewAddressWarning() error {
-	fmt.Printf("\nWARNING: Be aware that loosing your l402.token file in " +
+	term.Printf("\nWARNING: Be aware that loosing your l402.token file in " +
 		".loop under your home directory will take your ability to " +
 		"spend funds sent to the static address via loop-ins or " +
 		"withdrawals. You will have to wait until the deposit " +
@@ -683,10 +683,10 @@ func displayNewAddressWarning() error {
 		"lnd wallet. The deposit expiry could be months in the " +
 		"future.\n")
 
-	fmt.Printf("\nCONTINUE WITH NEW ADDRESS? (y/n): ")
+	term.Printf("\nCONTINUE WITH NEW ADDRESS? (y/n): ")
 
 	var answer string
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 	if answer == "y" {
 		return nil
 	}

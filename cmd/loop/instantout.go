@@ -82,29 +82,29 @@ func instantOut(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if len(confirmedReservations) == 0 {
-		fmt.Printf("No confirmed reservations found \n")
+		term.Printf("No confirmed reservations found \n")
 		return nil
 	}
 
-	fmt.Printf("Available reservations: \n\n")
+	term.Printf("Available reservations: \n\n")
 	for _, res := range confirmedReservations {
 		idx++
-		fmt.Printf("Reservation %v: shortid %x, amt %v, expiry "+
+		term.Printf("Reservation %v: shortid %x, amt %v, expiry "+
 			"height %v \n", idx, res.ReservationId[:3], res.Amount,
 			res.Expiry)
 
 		totalAmt += int64(res.Amount)
 	}
 
-	fmt.Println()
-	fmt.Printf("Max amount to instant out: %v\n", totalAmt)
-	fmt.Println()
+	term.Println()
+	term.Printf("Max amount to instant out: %v\n", totalAmt)
+	term.Println()
 
-	fmt.Println("Select reservations for instantout (e.g. '1,2,3')")
-	fmt.Println("Type 'ALL' to use all available reservations.")
+	term.Println("Select reservations for instantout (e.g. '1,2,3')")
+	term.Println("Type 'ALL' to use all available reservations.")
 
 	var answer string
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 
 	// Parse
 	var (
@@ -164,19 +164,19 @@ func instantOut(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println()
-	fmt.Printf(satAmtFmt, "Estimated on-chain fee:", quote.SweepFeeSat)
-	fmt.Printf(satAmtFmt, "Service fee:", quote.ServiceFeeSat)
-	fmt.Println()
+	term.Println()
+	term.Printf(satAmtFmt, "Estimated on-chain fee:", quote.SweepFeeSat)
+	term.Printf(satAmtFmt, "Service fee:", quote.ServiceFeeSat)
+	term.Println()
 
-	fmt.Printf("CONTINUE SWAP? (y/n): ")
+	term.Printf("CONTINUE SWAP? (y/n): ")
 
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 	if answer != "y" {
 		return errors.New("swap canceled")
 	}
 
-	fmt.Println("Starting instant swap out")
+	term.Println("Starting instant swap out")
 
 	// Now we can request the instant out swap.
 	instantOutRes, err := client.InstantOut(
@@ -191,11 +191,11 @@ func instantOut(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	fmt.Printf("Instant out swap initiated with ID: %x, State: %v \n",
+	term.Printf("Instant out swap initiated with ID: %x, State: %v \n",
 		instantOutRes.InstantOutHash, instantOutRes.State)
 
 	if instantOutRes.SweepTxId != "" {
-		fmt.Printf("Sweepless sweep tx id: %v \n",
+		term.Printf("Sweepless sweep tx id: %v \n",
 			instantOutRes.SweepTxId)
 	}
 

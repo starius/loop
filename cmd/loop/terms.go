@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightninglabs/loop/looprpc"
@@ -23,36 +22,36 @@ func terms(ctx context.Context, cmd *cli.Command) error {
 	defer cleanup()
 
 	printAmountRange := func(minAmt, maxAmt int64) {
-		fmt.Printf("Amount: %d - %d\n",
+		term.Printf("Amount: %d - %d\n",
 			btcutil.Amount(minAmt), btcutil.Amount(maxAmt),
 		)
 	}
 
-	fmt.Println("Loop Out")
-	fmt.Println("--------")
+	term.Println("Loop Out")
+	term.Println("--------")
 	req := &looprpc.TermsRequest{}
 	loopOutTerms, err := client.LoopOutTerms(ctx, req)
 	if err != nil {
-		fmt.Println(err)
+		term.Println(err)
 	} else {
 		printAmountRange(
 			loopOutTerms.MinSwapAmount,
 			loopOutTerms.MaxSwapAmount,
 		)
-		fmt.Printf("Cltv delta: %d - %d\n",
+		term.Printf("Cltv delta: %d - %d\n",
 			loopOutTerms.MinCltvDelta, loopOutTerms.MaxCltvDelta,
 		)
 	}
 
-	fmt.Println()
+	term.Println()
 
-	fmt.Println("Loop In")
-	fmt.Println("------")
+	term.Println("Loop In")
+	term.Println("------")
 	loopInTerms, err := client.GetLoopInTerms(
 		ctx, &looprpc.TermsRequest{},
 	)
 	if err != nil {
-		fmt.Println(err)
+		term.Println(err)
 	} else {
 		printAmountRange(
 			loopInTerms.MinSwapAmount,

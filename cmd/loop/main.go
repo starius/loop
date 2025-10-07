@@ -90,8 +90,14 @@ var (
 		setLiquidityRuleCommand, suggestSwapCommand, setParamsCommand,
 		getInfoCommand, abandonSwapCommand, reservationsCommands,
 		instantOutCommand, listInstantOutsCommand,
-		printManCommand, printMarkdownCommand,
+		printManCommand, printMarkdownCommand, sessionCommand,
 	}
+
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
+
+	sessionRec *sessionRecorder
+
+	clientDialer clientConnDialer = &grpcDialer{}
 )
 
 const (
@@ -144,26 +150,66 @@ func printJSON(resp interface{}) {
 		fatal(err)
 	}
 	out.WriteString("\n")
-	_, _ = out.WriteTo(os.Stdout)
+	if _, err := term.Write(out.Bytes()); err != nil {
+		fatal(err)
+	}
 }
 
 func printRespJSON(resp proto.Message) {
 	jsonBytes, err := lnrpc.ProtoJSONMarshalOpts.Marshal(resp)
 	if err != nil {
-		fmt.Println("unable to decode response: ", err)
+		term.Println("unable to decode response: ", err)
 		return
 	}
 
-	fmt.Println(string(jsonBytes))
+	term.Println(string(jsonBytes))
 }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "[loop] %v\n", err)
+	term.Errorf("[loop] %v\n", err)
+	if sessionRec != nil {
+		if finalizeErr := sessionRec.Finalize(1); finalizeErr != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", finalizeErr)
+		}
+	}
 	os.Exit(1)
 }
 
 func main() {
-	rootCmd := &cli.Command{
+	var err error
+	sessionRec, err = newSessionRecorder(os.Args)
+	if err != nil {
+		fatal(err)
+	}
+
+	if sessionRec != nil {
+		term = newTerminal(
+			sessionRec.WrapReader(eventStdin, os.Stdin),
+			sessionRec.WrapWriter(eventStdout, os.Stdout),
+			sessionRec.WrapWriter(eventStderr, os.Stderr),
+		)
+	}
+
+	rootCmd := newRootCommand()
+
+	ctx := context.Background()
+	if sessionRec != nil {
+		ctx = sessionRec.InjectContext(ctx)
+	}
+
+	if err := rootCmd.Run(ctx, os.Args); err != nil {
+		fatal(err)
+	}
+
+	if sessionRec != nil {
+		if err := sessionRec.Finalize(0); err != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", err)
+		}
+	}
+}
+
+func newRootCommand() *cli.Command {
+	return &cli.Command{
 		Name:    "loop",
 		Usage:   "control plane for your loopd",
 		Version: loop.RichVersion(),
@@ -184,26 +230,38 @@ func main() {
 			return cli.ShowRootCommandHelp(cmd)
 		},
 	}
-
-	if err := rootCmd.Run(context.Background(), os.Args); err != nil {
-		fatal(err)
-	}
 }
 
 func getClient(ctx context.Context, cmd *cli.Command) (looprpc.SwapClientClient, func(), error) {
+	conn, cleanup, err := clientDialer.Dial(ctx, cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	loopClient := looprpc.NewSwapClientClient(conn)
+	return loopClient, cleanup, nil
+}
+
+type clientConnDialer interface {
+	Dial(ctx context.Context, cmd *cli.Command) (grpc.ClientConnInterface, func(), error)
+}
+
+type grpcDialer struct{}
+
+func (d *grpcDialer) Dial(ctx context.Context, cmd *cli.Command) (grpc.ClientConnInterface, func(), error) {
 	rpcServer := cmd.String("rpcserver")
 	tlsCertPath, macaroonPath, err := extractPathArgs(cmd)
 	if err != nil {
 		return nil, nil, err
 	}
-	conn, err := getClientConn(ctx, rpcServer, tlsCertPath, macaroonPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() { conn.Close() }
 
-	loopClient := looprpc.NewSwapClientClient(conn)
-	return loopClient, cleanup, nil
+	return getClientConn(ctx, rpcServer, tlsCertPath, macaroonPath)
+}
+
+func withClientDialer(d clientConnDialer) func() {
+	prev := clientDialer
+	clientDialer = d
+	return func() { clientDialer = prev }
 }
 
 func getMaxRoutingFee(amt btcutil.Amount) btcutil.Amount {
@@ -306,24 +364,24 @@ func displayInDetails(req *looprpc.QuoteRequest,
 	resp *looprpc.InQuoteResponse, verbose bool) error {
 
 	if req.ExternalHtlc {
-		fmt.Printf("On-chain fee for external loop in is not " +
+		term.Printf("On-chain fee for external loop in is not " +
 			"included.\nSufficient fees will need to be paid " +
 			"when constructing the transaction in the external " +
 			"wallet.\n\n")
 	}
 
 	if req.DepositOutpoints != nil {
-		fmt.Printf("On-chain fees for static address loop-ins are not " +
+		term.Printf("On-chain fees for static address loop-ins are not " +
 			"included.\nThey were already paid when the deposits " +
 			"were created.\n\n")
 	}
 
 	printQuoteInResp(req, resp, verbose)
 
-	fmt.Printf("\nCONTINUE SWAP? (y/n): ")
+	term.Printf("\nCONTINUE SWAP? (y/n): ")
 
 	var answer string
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 	if answer == "y" {
 		return nil
 	}
@@ -338,24 +396,24 @@ func displayOutDetails(l *outLimits, warning string, req *looprpc.QuoteRequest,
 
 	// Display fee limits.
 	if verbose {
-		fmt.Println()
-		fmt.Printf(satAmtFmt, "Max on-chain fee:", l.maxMinerFee)
-		fmt.Printf(satAmtFmt,
+		term.Println()
+		term.Printf(satAmtFmt, "Max on-chain fee:", l.maxMinerFee)
+		term.Printf(satAmtFmt,
 			"Max off-chain swap routing fee:", l.maxSwapRoutingFee,
 		)
-		fmt.Printf(satAmtFmt, "Max off-chain prepay routing fee:",
+		term.Printf(satAmtFmt, "Max off-chain prepay routing fee:",
 			l.maxPrepayRoutingFee)
 	}
 
 	// show warning
 	if warning != "" {
-		fmt.Printf("\n%s\n\n", warning)
+		term.Printf("\n%s\n\n", warning)
 	}
 
-	fmt.Printf("CONTINUE SWAP? (y/n): ")
+	term.Printf("CONTINUE SWAP? (y/n): ")
 
 	var answer string
-	fmt.Scanln(&answer)
+	term.Scanln(&answer)
 	if answer == "y" {
 		return nil
 	}
@@ -384,22 +442,22 @@ func logSwap(swap *looprpc.SwapStatus) {
 	}
 
 	if swap.Type == looprpc.SwapType_LOOP_OUT {
-		fmt.Printf("%v %v %v %v - %v",
+		term.Printf("%v %v %v %v - %v",
 			time.Unix(0, swap.LastUpdateTime).Format(time.RFC3339),
 			swap.Type, swapState, btcutil.Amount(swap.Amt),
 			swap.HtlcAddressP2Wsh,
 		)
 	} else {
-		fmt.Printf("%v %v %v %v -",
+		term.Printf("%v %v %v %v -",
 			time.Unix(0, swap.LastUpdateTime).Format(time.RFC3339),
 			swap.Type, swapState, btcutil.Amount(swap.Amt))
 
 		if swap.HtlcAddressP2Wsh != "" {
-			fmt.Printf(" P2WSH: %v", swap.HtlcAddressP2Wsh)
+			term.Printf(" P2WSH: %v", swap.HtlcAddressP2Wsh)
 		}
 
 		if swap.HtlcAddressP2Tr != "" {
-			fmt.Printf(" P2TR: %v", swap.HtlcAddressP2Tr)
+			term.Printf(" P2TR: %v", swap.HtlcAddressP2Tr)
 		}
 	}
 
@@ -407,21 +465,21 @@ func logSwap(swap *looprpc.SwapStatus) {
 		swap.State != looprpc.SwapState_HTLC_PUBLISHED &&
 		swap.State != looprpc.SwapState_PREIMAGE_REVEALED {
 
-		fmt.Printf(" (cost: server %v, onchain %v, offchain %v)",
+		term.Printf(" (cost: server %v, onchain %v, offchain %v)",
 			swap.CostServer, swap.CostOnchain, swap.CostOffchain,
 		)
 	}
 
-	fmt.Println()
+	term.Println()
 }
 
-func getClientConn(ctx context.Context, address, tlsCertPath, macaroonPath string) (*grpc.ClientConn,
-	error) {
+func getClientConn(ctx context.Context, address, tlsCertPath, macaroonPath string) (grpc.ClientConnInterface,
+	func(), error) {
 
 	// We always need to send a macaroon.
 	macOption, err := readMacaroon(macaroonPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	opts := []grpc.DialOption{
@@ -429,21 +487,34 @@ func getClientConn(ctx context.Context, address, tlsCertPath, macaroonPath strin
 		macOption,
 	}
 
+	if sessionRec != nil {
+		if unary := sessionRec.UnaryInterceptor(); unary != nil {
+			opts = append(opts, grpc.WithChainUnaryInterceptor(unary))
+		}
+		if stream := sessionRec.StreamInterceptor(); stream != nil {
+			opts = append(opts, grpc.WithChainStreamInterceptor(stream))
+		}
+	}
+
 	// TLS cannot be disabled, we'll always have a cert file to read.
 	creds, err := credentials.NewClientTLSFromFile(tlsCertPath, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	opts = append(opts, grpc.WithTransportCredentials(creds))
 
 	conn, err := grpc.DialContext(ctx, address, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("unable to connect to RPC server: %v",
+		return nil, nil, fmt.Errorf("unable to connect to RPC server: %v",
 			err)
 	}
 
-	return conn, nil
+	cleanup := func() {
+		_ = conn.Close()
+	}
+
+	return conn, cleanup, nil
 }
 
 // readMacaroon tries to read the macaroon file at the specified path and create
