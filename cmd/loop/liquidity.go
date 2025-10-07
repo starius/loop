@@ -25,7 +25,7 @@ var getLiquidityParamsCommand = &cli.Command{
 }
 
 func getParams(ctx context.Context, cmd *cli.Command) error {
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func setRule(ctx context.Context, cmd *cli.Command) error {
 		pubkeyRule = true
 	}
 
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -395,7 +395,7 @@ var setParamsCommand = &cli.Command{
 }
 
 func setParams(ctx context.Context, cmd *cli.Command) error {
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -693,7 +693,7 @@ var suggestSwapCommand = &cli.Command{
 }
 
 func suggestSwap(ctx context.Context, cmd *cli.Command) error {
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
