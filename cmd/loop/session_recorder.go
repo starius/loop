@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/loop"
+	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -33,6 +34,7 @@ type sessionRecorder struct {
 	mu       sync.Mutex
 	started  time.Time
 	filePath string
+	slug     string
 
 	metadata sessionMetadata
 	events   []sessionEvent
@@ -93,6 +95,8 @@ func newSessionRecorder(args []string) (*sessionRecorder, error) {
 		},
 	}
 
+	recorder.slug = deriveSessionSlug(args)
+
 	metadata := sessionMetadata{
 		Args:      append([]string(nil), args...),
 		Env:       collectSessionEnv(),
@@ -141,7 +145,11 @@ func getWorkingDir() string {
 func (r *sessionRecorder) resolveFilePath(dest string) (string, error) {
 	if dest == "auto" || dest == "" {
 		timestamp := r.started.Format("20060102-150405")
-		dest = fmt.Sprintf("session-%s%s", timestamp, sessionFileExt)
+		slug := r.slug
+		if slug == "" {
+			slug = "session"
+		}
+		dest = fmt.Sprintf("%s-%s%s", slug, timestamp, sessionFileExt)
 	}
 
 	if filepath.Ext(dest) == "" {
@@ -401,4 +409,83 @@ func (r *sessionRecorder) InjectContext(ctx context.Context) context.Context {
 	}
 
 	return metadata.AppendToOutgoingContext(ctx, "loop-session", filepath.Base(r.filePath))
+}
+
+func deriveSessionSlug(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	base := filepath.Base(args[0])
+	tokens := []string{base}
+
+	root := newRootCommand()
+	if root == nil {
+		return sanitizeSlug(strings.Join(tokens, "-"))
+	}
+
+	current := root
+
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			break
+		}
+
+		if current == nil {
+			break
+		}
+
+		next := findSubcommand(current, arg)
+		if next == nil {
+			break
+		}
+
+		tokens = append(tokens, next.Name)
+		current = next
+	}
+
+	return sanitizeSlug(strings.Join(tokens, "-"))
+}
+
+func findSubcommand(cmd *cli.Command, name string) *cli.Command {
+	lower := strings.ToLower(name)
+	for _, child := range cmd.Commands {
+		if strings.EqualFold(child.Name, name) || containsFold(child.Aliases, lower) {
+			return child
+		}
+	}
+	return nil
+}
+
+func containsFold(values []string, target string) bool {
+	for _, v := range values {
+		if strings.EqualFold(v, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeSlug(value string) string {
+	value = strings.ToLower(value)
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+
+		if !lastDash {
+			builder.WriteRune('-')
+			lastDash = true
+		}
+	}
+
+	slug := strings.Trim(builder.String(), "-")
+	if slug == "" {
+		return "session"
+	}
+	return slug
 }

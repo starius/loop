@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,9 +23,29 @@ import (
 )
 
 func TestRecordedSessions(t *testing.T) {
-	sessionFiles, err := filepath.Glob(filepath.Join("testdata", "sessions", "*.json"))
+	root := filepath.Join("testdata", "sessions")
+	if _, err := os.Stat(root); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skip("no recorded sessions present")
+		}
+		t.Fatalf("stat sessions dir: %v", err)
+	}
+
+	var sessionFiles []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), sessionFileExt) {
+			sessionFiles = append(sessionFiles, path)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("glob sessions: %v", err)
+		t.Fatalf("walk sessions: %v", err)
 	}
 	if len(sessionFiles) == 0 {
 		t.Skip("no recorded sessions present")
