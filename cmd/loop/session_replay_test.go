@@ -58,7 +58,11 @@ func TestRecordedSessions(t *testing.T) {
 
 	for _, path := range sessionFiles {
 		path := path
-		t.Run(filepath.Base(path), func(t *testing.T) {
+		relName := strings.TrimPrefix(path, sessionsRoot+"/")
+		if relName == "" {
+			relName = filepath.Base(path)
+		}
+		t.Run(relName, func(t *testing.T) {
 			replay, err := loadRecordedSession(embeddedSessions, path)
 			if err != nil {
 				t.Fatalf("load session: %v", err)
