@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,17 +23,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+//go:embed testdata/sessions
+var embeddedSessions embed.FS
+
 func TestRecordedSessions(t *testing.T) {
-	root := filepath.Join("testdata", "sessions")
-	if _, err := os.Stat(root); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+	const sessionsRoot = "testdata/sessions"
+
+	if _, err := fs.ReadDir(embeddedSessions, sessionsRoot); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			t.Skip("no recorded sessions present")
 		}
-		t.Fatalf("stat sessions dir: %v", err)
+		t.Fatalf("read sessions dir: %v", err)
 	}
 
 	var sessionFiles []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(embeddedSessions, sessionsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -54,7 +59,7 @@ func TestRecordedSessions(t *testing.T) {
 	for _, path := range sessionFiles {
 		path := path
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			replay, err := loadRecordedSession(path)
+			replay, err := loadRecordedSession(embeddedSessions, path)
 			if err != nil {
 				t.Fatalf("load session: %v", err)
 			}
@@ -109,18 +114,17 @@ type recordedSession struct {
 	conn     *recordedClientConn
 }
 
-func loadRecordedSession(path string) (*recordedSession, error) {
-	file, err := os.Open(path)
+func loadRecordedSession(source fs.FS, path string) (*recordedSession, error) {
+	blob, err := fs.ReadFile(source, path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 
 	var data struct {
 		Metadata sessionMetadata `json:"metadata"`
 		Events   []sessionEvent  `json:"events"`
 	}
-	if err := json.NewDecoder(file).Decode(&data); err != nil {
+	if err := json.Unmarshal(blob, &data); err != nil {
 		return nil, err
 	}
 
