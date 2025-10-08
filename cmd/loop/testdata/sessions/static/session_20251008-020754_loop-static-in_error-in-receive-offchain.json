@@ -1,0 +1,204 @@
+{
+  "metadata": {
+    "args": [
+      "loop",
+      "static",
+      "in",
+      "--all"
+    ],
+    "env": {
+      "LOOPCLI_NETWORK": "regtest",
+      "LOOPCLI_RPCSERVER": "127.0.0.1:11010"
+    },
+    "start_time": "2025-10-08T02:07:54.260164411-03:00",
+    "work_dir": "/home/user/loop",
+    "version": "0.31.2-beta commit=looprpc/v1.0.9-60-g018a6194a2d034cfd8e483b92e28f5f6269b1653-dirty commit_hash=018a6194a2d034cfd8e483b92e28f5f6269b1653",
+    "exit_code": 0,
+    "duration": 3905610330
+  },
+  "events": [
+    {
+      "time_ms": 1,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/ListStaticAddressDeposits",
+        "event": "request",
+        "message_type": "looprpc.ListStaticAddressDepositsRequest",
+        "payload": {
+          "state_filter": "DEPOSITED",
+          "outpoints": []
+        }
+      }
+    },
+    {
+      "time_ms": 5,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/ListStaticAddressDeposits",
+        "event": "response",
+        "message_type": "looprpc.ListStaticAddressDepositsResponse",
+        "payload": {
+          "filtered_deposits": [
+            {
+              "id": "ksN5TZExPnugVckrLt2b3loTk2zug4FHOGO6eW67IrA=",
+              "state": "DEPOSITED",
+              "outpoint": "c7cb7fc252851677f68e8767160eb49eb2943847d2c35bd370212f6bea1a334c:0",
+              "value": "300000",
+              "confirmation_height": "130",
+              "blocks_until_expiry": "14395",
+              "swap_hash": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "time_ms": 5,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/GetLoopInQuote",
+        "event": "request",
+        "message_type": "looprpc.QuoteRequest",
+        "payload": {
+          "amt": "0",
+          "conf_target": 0,
+          "external_htlc": false,
+          "swap_publication_deadline": "0",
+          "loop_in_last_hop": "",
+          "loop_in_route_hints": [],
+          "private": false,
+          "deposit_outpoints": [
+            "c7cb7fc252851677f68e8767160eb49eb2943847d2c35bd370212f6bea1a334c:0"
+          ],
+          "asset_info": null,
+          "auto_select_deposits": false,
+          "fast": false
+        }
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/GetLoopInQuote",
+        "event": "response",
+        "message_type": "looprpc.InQuoteResponse",
+        "payload": {
+          "swap_fee_sat": "1815",
+          "htlc_publish_fee_sat": "0",
+          "cltv_delta": 0,
+          "conf_target": 0,
+          "quoted_amt": "300000"
+        }
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "stdout",
+      "data": {
+        "text": "On-chain fees for static address loop-ins are not included.\nThey were already paid when the deposits were created.\n\n"
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "stdout",
+      "data": {
+        "text": "Previously deposited on-chain:             300000 sat\n"
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "stdout",
+      "data": {
+        "text": "Receive off-chain:                          -1815 sat\n"
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "stdout",
+      "data": {
+        "text": "Estimated total fee:                         1815 sat\n"
+      }
+    },
+    {
+      "time_ms": 27,
+      "kind": "stdout",
+      "data": {
+        "text": "\nCONTINUE SWAP? (y/n): "
+      }
+    },
+    {
+      "time_ms": 3438,
+      "kind": "stdin",
+      "data": {
+        "text": "y"
+      }
+    },
+    {
+      "time_ms": 3438,
+      "kind": "stdin",
+      "data": {
+        "text": "\n"
+      }
+    },
+    {
+      "time_ms": 3439,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/StaticAddressLoopIn",
+        "event": "request",
+        "message_type": "looprpc.StaticAddressLoopInRequest",
+        "payload": {
+          "outpoints": [
+            "c7cb7fc252851677f68e8767160eb49eb2943847d2c35bd370212f6bea1a334c:0"
+          ],
+          "max_swap_fee_satoshis": "1815",
+          "last_hop": "",
+          "label": "",
+          "initiator": "loop-cli",
+          "route_hints": [],
+          "private": false,
+          "payment_timeout_seconds": 60,
+          "amount": "0",
+          "fast": false
+        }
+      }
+    },
+    {
+      "time_ms": 3904,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/StaticAddressLoopIn",
+        "event": "response",
+        "message_type": "looprpc.StaticAddressLoopInResponse",
+        "payload": {
+          "swap_hash": "ZYxZBm+p4ZJcGW5UIzNhWxEC6x1W6L9GOw346IDj6Nc=",
+          "state": "SignHtlcTx",
+          "amount": "300000",
+          "htlc_cltv": 1135,
+          "quoted_swap_fee_satoshis": "1815",
+          "max_swap_fee_satoshis": "1815",
+          "initiation_height": 135,
+          "protocol_version": "V0",
+          "label": "",
+          "initiator": "loop-cli",
+          "payment_timeout_seconds": 60
+        }
+      }
+    },
+    {
+      "time_ms": 3905,
+      "kind": "stdout",
+      "data": {
+        "text": "{\n    \"amount\": \"300000\",\n    \"htlc_cltv\": 1135,\n    \"initiation_height\": 135,\n    \"initiator\": \"loop-cli\",\n    \"label\": \"\",\n    \"max_swap_fee_satoshis\": \"1815\",\n    \"payment_timeout_seconds\": 60,\n    \"protocol_version\": \"V0\",\n    \"quoted_swap_fee_satoshis\": \"1815\",\n    \"state\": \"SignHtlcTx\",\n    \"swap_hash\": \"658c59066fa9e1925c196e542333615b1102eb1d56e8bf463b0df8e880e3e8d7\"\n}\n"
+      }
+    },
+    {
+      "time_ms": 3905,
+      "kind": "exit",
+      "data": {
+        "code": 0
+      }
+    }
+  ]
+}

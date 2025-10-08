@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "args": [
+      "loop",
+      "static",
+      "listunspent"
+    ],
+    "env": {
+      "LOOPCLI_NETWORK": "regtest",
+      "LOOPCLI_RPCSERVER": "127.0.0.1:11010"
+    },
+    "start_time": "2025-10-08T02:06:29.318441162-03:00",
+    "work_dir": "/home/user/loop",
+    "version": "0.31.2-beta commit=looprpc/v1.0.9-60-g018a6194a2d034cfd8e483b92e28f5f6269b1653-dirty commit_hash=018a6194a2d034cfd8e483b92e28f5f6269b1653",
+    "exit_code": 0,
+    "duration": 8563752
+  },
+  "events": [
+    {
+      "time_ms": 2,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/ListUnspentDeposits",
+        "event": "request",
+        "message_type": "looprpc.ListUnspentDepositsRequest",
+        "payload": {
+          "min_confs": 0,
+          "max_confs": 0
+        }
+      }
+    },
+    {
+      "time_ms": 8,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/ListUnspentDeposits",
+        "event": "response",
+        "message_type": "looprpc.ListUnspentDepositsResponse",
+        "payload": {
+          "utxos": [
+            {
+              "static_address": "bcrt1p942j05qtulalkg4gymsnulmc7vm6l22qt8arftwep7eum9p8r6kqhaul2p",
+              "amount_sat": "300000",
+              "outpoint": "c7cb7fc252851677f68e8767160eb49eb2943847d2c35bd370212f6bea1a334c:0",
+              "confirmations": "3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "time_ms": 8,
+      "kind": "stdout",
+      "data": {
+        "text": "{\n    \"utxos\": [\n        {\n            \"amount_sat\": \"300000\",\n            \"confirmations\": \"3\",\n            \"outpoint\": \"c7cb7fc252851677f68e8767160eb49eb2943847d2c35bd370212f6bea1a334c:0\",\n            \"static_address\": \"bcrt1p942j05qtulalkg4gymsnulmc7vm6l22qt8arftwep7eum9p8r6kqhaul2p\"\n        }\n    ]\n}\n"
+      }
+    },
+    {
+      "time_ms": 8,
+      "kind": "exit",
+      "data": {
+        "code": 0
+      }
+    }
+  ]
+}

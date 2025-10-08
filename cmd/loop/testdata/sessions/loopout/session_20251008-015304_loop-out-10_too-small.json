@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "args": [
+      "loop",
+      "out",
+      "10"
+    ],
+    "env": {
+      "LOOPCLI_NETWORK": "regtest",
+      "LOOPCLI_RPCSERVER": "127.0.0.1:11010"
+    },
+    "start_time": "2025-10-08T01:53:04.927799403-03:00",
+    "work_dir": "/home/user/loop",
+    "version": "0.31.2-beta commit=looprpc/v1.0.9-60-g018a6194a2d034cfd8e483b92e28f5f6269b1653-dirty commit_hash=018a6194a2d034cfd8e483b92e28f5f6269b1653",
+    "exit_code": 1,
+    "duration": 91650396
+  },
+  "events": [
+    {
+      "time_ms": 1,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/LoopOutQuote",
+        "event": "request",
+        "message_type": "looprpc.QuoteRequest",
+        "payload": {
+          "amt": "10",
+          "conf_target": 9,
+          "external_htlc": false,
+          "swap_publication_deadline": "1759900984",
+          "loop_in_last_hop": "",
+          "loop_in_route_hints": [],
+          "private": false,
+          "deposit_outpoints": [],
+          "asset_info": null,
+          "auto_select_deposits": false,
+          "fast": false
+        }
+      }
+    },
+    {
+      "time_ms": 91,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/LoopOutQuote",
+        "event": "error",
+        "error": "rpc error: code = Unknown desc = swap amount too low"
+      }
+    },
+    {
+      "time_ms": 91,
+      "kind": "stderr",
+      "data": {
+        "text": "[loop] rpc error: code = Unknown desc = swap amount too low\n"
+      }
+    },
+    {
+      "time_ms": 91,
+      "kind": "exit",
+      "data": {
+        "code": 1
+      }
+    }
+  ]
+}
