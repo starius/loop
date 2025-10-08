@@ -16,8 +16,9 @@ import (
 )
 
 var sessionCommand = &cli.Command{
-	Name:  "session",
-	Usage: "work with recorded CLI sessions",
+	Name:   "session",
+	Usage:  "work with recorded CLI sessions",
+	Hidden: true,
 	Commands: []*cli.Command{
 		sessionPlayCommand,
 		sessionUpdateCommand,
