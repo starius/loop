@@ -52,6 +52,10 @@ func TestRecordedSessions(t *testing.T) {
 		}
 
 		t.Run(relName, func(t *testing.T) {
+			prevDeterministic := forceDeterministicJSON
+			forceDeterministicJSON = true
+			defer func() { forceDeterministicJSON = prevDeterministic }()
+
 			replay, err := loadRecordedSessionFS(embeddedSessions, path)
 			require.NoError(t, err)
 

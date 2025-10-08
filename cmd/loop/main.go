@@ -97,6 +97,9 @@ var (
 
 	sessionRec *sessionRecorder
 
+	// forceDeterministicJSON is enabled by tests to obtain stable JSON output.
+	forceDeterministicJSON bool
+
 	clientDialer clientConnDialer = &grpcDialer{}
 )
 
@@ -150,7 +153,8 @@ func printJSON(resp interface{}) {
 		fatal(err)
 	}
 	out.WriteString("\n")
-	if _, err := term.Write(out.Bytes()); err != nil {
+	printBytes := maybeNormalizeJSON(out.Bytes())
+	if _, err := term.Write(printBytes); err != nil {
 		fatal(err)
 	}
 }
@@ -162,7 +166,7 @@ func printRespJSON(resp proto.Message) {
 		return
 	}
 
-	term.Println(string(jsonBytes))
+	term.Println(string(maybeNormalizeJSON(jsonBytes)))
 }
 
 func fatal(err error) {
@@ -262,6 +266,33 @@ func withClientDialer(d clientConnDialer) func() {
 	prev := clientDialer
 	clientDialer = d
 	return func() { clientDialer = prev }
+}
+
+// maybeNormalizeJSON rewrites JSON output to avoid the build-dependent spacing
+// introduced by google.golang.org/protobuf/internal/encoding/json (see
+// WriteName in protobuf-go-hex-display/internal/encoding/json/encode.go, which
+// uses internal/detrand.Bool). When recording or replaying sessions we ensure
+// stable output by re-encoding with the standard library.
+func maybeNormalizeJSON(raw []byte) []byte {
+	if sessionRec == nil && !forceDeterministicJSON {
+		return raw
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return raw
+	}
+
+	normalized, err := json.MarshalIndent(parsed, "", "    ")
+	if err != nil {
+		return raw
+	}
+
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		normalized = append(normalized, '\n')
+	}
+
+	return normalized
 }
 
 func getMaxRoutingFee(amt btcutil.Amount) btcutil.Amount {
