@@ -62,10 +62,6 @@ func playSession(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	path := cmd.Args().Get(0)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(sessionDefaultDir, path)
-	}
-
 	file, err := os.Open(path)
 	if err != nil {
 		return err
