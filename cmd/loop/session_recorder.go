@@ -105,11 +105,11 @@ func newSessionRecorder(args []string) (*sessionRecorder, error) {
 	}
 	recorder.metadata = metadata
 
-	filePath, err := recorder.resolveFilePath(destination)
+	baseDir, fileName, err := recorder.resolveFilePath(destination)
 	if err != nil {
 		return nil, err
 	}
-	recorder.filePath = filePath
+	recorder.filePath = filepath.Join(baseDir, fileName)
 
 	return recorder, nil
 }
@@ -141,29 +141,45 @@ func getWorkingDir() string {
 	return wd
 }
 
-func (r *sessionRecorder) resolveFilePath(dest string) (string, error) {
-	if dest == "auto" || dest == "" {
-		timestamp := r.started.Format("20060102-150405")
-		slug := r.slug
-		if slug == "" {
-			slug = "session"
+func (r *sessionRecorder) resolveFilePath(dest string) (string, string, error) {
+	timestamp := r.started.Format("20060102-150405")
+	slug := r.slug
+	if slug == "" {
+		slug = "session"
+	}
+
+	baseDir := sessionDefaultDir
+	filename := fmt.Sprintf("session-%s-%s%s", timestamp, slug, sessionFileExt)
+
+	switch {
+	case dest == "" || dest == "auto":
+	case strings.Contains(dest, string(filepath.Separator)):
+		// Treat as explicit path.
+		if filepath.Ext(dest) == "" {
+			dest += sessionFileExt
 		}
-		dest = fmt.Sprintf("session-%s-%s%s", timestamp, slug, sessionFileExt)
+
+		if filepath.IsAbs(dest) {
+			return filepath.Dir(dest), filepath.Base(dest), nil
+		}
+
+		full := filepath.Join(sessionDefaultDir, dest)
+		return filepath.Dir(full), filepath.Base(full), nil
+	default:
+		parts := strings.Split(dest, "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			baseDir = filepath.Join(baseDir, parts[0])
+			filename = fmt.Sprintf(
+				"session-%s-%s_%s%s", timestamp, slug, parts[1], sessionFileExt,
+			)
+		}
 	}
 
-	if filepath.Ext(dest) == "" {
-		dest += sessionFileExt
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", "", err
 	}
 
-	if !filepath.IsAbs(dest) {
-		dest = filepath.Join(sessionDefaultDir, dest)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return "", err
-	}
-
-	return dest, nil
+	return baseDir, filename, nil
 }
 
 func (r *sessionRecorder) logEvent(kind string, payload interface{}) {

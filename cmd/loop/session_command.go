@@ -231,21 +231,12 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 	restoreEnv := applyEnv(replay.env)
 	defer restoreEnv()
 
-	prevDialer := withClientDialer(&replayDialer{conn: replay.conn})
-	defer prevDialer()
-
-	prevTerm := term
-	defer func() { term = prevTerm }()
-
-	prevSession := sessionRec
-	defer func() { sessionRec = prevSession }()
-
-	prevRecordEnv, hadRecordEnv := os.LookupEnv(sessionEnvVar)
+	prevRecordEnv, prevRecordSet := os.LookupEnv(sessionEnvVar)
 	if err := os.Setenv(sessionEnvVar, destPath); err != nil {
 		return err
 	}
 	recorder, err := newSessionRecorder(replay.args)
-	if !hadRecordEnv {
+	if !prevRecordSet {
 		_ = os.Unsetenv(sessionEnvVar)
 	} else {
 		_ = os.Setenv(sessionEnvVar, prevRecordEnv)
@@ -254,6 +245,15 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	sessionRec = recorder
+
+	prevDialer := withClientDialer(&replayDialer{conn: replay.conn})
+	defer prevDialer()
+
+	prevTerm := term
+	defer func() { term = prevTerm }()
+
+	prevSession := sessionRec
+	defer func() { sessionRec = prevSession }()
 
 	stdoutSink := io.Discard
 	stderrSink := io.Discard
