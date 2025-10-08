@@ -292,6 +292,12 @@ func (r *sessionRecorder) finalize(code int) error {
 			Events:   events,
 		}
 
+		err := os.MkdirAll(filepath.Dir(r.filePath), 0o755)
+		if err != nil {
+			finalizeErr = err
+			return
+		}
+
 		file, err := os.Create(r.filePath)
 		if err != nil {
 			finalizeErr = err
