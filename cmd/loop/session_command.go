@@ -130,7 +130,7 @@ func displayEvent(ts time.Duration, event sessionEvent) error {
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			return err
 		}
-		term.Printf("[%s] exit code=%d\n", timestamp, payload.Code)
+		term.Printf("[%s] exit failed=%t\n", timestamp, payload.Failed)
 	default:
 		return errors.New("unknown event kind: " + event.Kind)
 	}
@@ -274,18 +274,15 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 	}
 	root := cloneCommand(originalRoot, 0)
 	runErr := root.Run(runCtx, replay.args)
-	exitCode := 0
-	if runErr != nil {
-		exitCode = 1
-	}
+	failed := runErr != nil
 
-	if replay.exitCode != nil && exitCode != *replay.exitCode {
+	if replay.failed != nil && failed != *replay.failed {
 		return fmt.Errorf(
-			"exit code changed from %d to %d", *replay.exitCode, exitCode,
+			"failure flag changed from %t to %t", *replay.failed, failed,
 		)
 	}
 
-	if err := sessionRec.Finalize(exitCode); err != nil {
+	if err := sessionRec.Finalize(failed); err != nil {
 		return fmt.Errorf("finalize session: %w", err)
 	}
 

@@ -78,14 +78,13 @@ func TestRecordedSessions(t *testing.T) {
 			cmd := newRootCommand()
 
 			err = cmd.Run(context.Background(), replay.args)
-			exitCode := 0
-			if err != nil {
-				exitCode = 1
+			failed := err != nil
+			if failed {
 				term.Errorf("[loop] %v\n", err)
 			}
 
-			if replay.exitCode != nil {
-				require.Equal(t, *replay.exitCode, exitCode, "exit code mismatch")
+			if replay.failed != nil {
+				require.Equal(t, *replay.failed, failed, "failed flag mismatch")
 			}
 
 			require.Equal(t, replay.stdout, stdoutBuf.String(), "stdout mismatch")

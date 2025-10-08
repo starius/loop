@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,7 +50,7 @@ type sessionMetadata struct {
 	StartTime time.Time         `json:"start_time"`
 	WorkDir   string            `json:"work_dir"`
 	Version   string            `json:"version"`
-	ExitCode  *int              `json:"exit_code,omitempty"`
+	Failed    *bool             `json:"failed,omitempty"`
 	Duration  *time.Duration    `json:"duration,omitempty"`
 }
 
@@ -76,7 +77,7 @@ type grpcPayload struct {
 }
 
 type exitPayload struct {
-	Code int `json:"code"`
+	Failed bool `json:"failed"`
 }
 
 func newSessionRecorder(args []string) (*sessionRecorder, error) {
@@ -144,28 +145,40 @@ func (r *sessionRecorder) resolveFilePath(dest string) (string, string) {
 		slug = "session"
 	}
 
-	parts := strings.Split(dest, "/")
-	var subdir, action string
-	if len(parts) == 2 {
-		subdir, action = parts[0], parts[1]
-	}
-
-	nameParts := []string{
-		"session",
-		timestamp,
-		slug,
-	}
-	if action != "" {
-		nameParts = append(nameParts, action)
-	}
-	name := strings.Join(nameParts, "_") + ".json"
-
+	defaultName := fmt.Sprintf("session-%s-%s%s", timestamp, slug, sessionFileExt)
 	baseDir := sessionDefaultDir
-	if subdir != "" {
-		baseDir = filepath.Join(baseDir, subdir)
+
+	switch {
+	case dest == "" || dest == "auto":
+		return baseDir, defaultName
+
+	case filepath.IsAbs(dest):
+		name := dest
+		if filepath.Ext(name) == "" {
+			name += sessionFileExt
+		}
+		return filepath.Dir(name), filepath.Base(name)
+
+	case strings.Count(dest, "/") == 1:
+		parts := strings.SplitN(dest, "/", 2)
+		subdir, action := parts[0], parts[1]
+		if subdir != "" && action != "" && !strings.ContainsRune(subdir, os.PathSeparator) && !strings.ContainsRune(action, os.PathSeparator) {
+			filename := fmt.Sprintf("session-%s-%s_%s%s", timestamp, slug, action, sessionFileExt)
+			return filepath.Join(baseDir, subdir), filename
+		}
+
+	case strings.ContainsRune(dest, os.PathSeparator):
+		name := dest
+		if filepath.Ext(name) == "" {
+			name += sessionFileExt
+		}
+		full := filepath.Join(sessionDefaultDir, name)
+		return filepath.Dir(full), filepath.Base(full)
 	}
 
-	return baseDir, name
+	// Treat remaining values as action suffixes.
+	filename := fmt.Sprintf("session-%s-%s_%s%s", timestamp, slug, dest, sessionFileExt)
+	return baseDir, filename
 }
 
 func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
@@ -242,28 +255,29 @@ func (rdr *recordingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *sessionRecorder) logExit(code int) {
+func (r *sessionRecorder) logExit(failed bool) {
 	if r == nil {
 		return
 	}
 
-	r.logEvent(eventExit, exitPayload{Code: code})
+	r.logEvent(eventExit, exitPayload{Failed: failed})
 
 	duration := time.Since(r.started)
 	r.mu.Lock()
-	r.metadata.ExitCode = &code
+	failedCopy := failed
+	r.metadata.Failed = &failedCopy
 	r.metadata.Duration = &duration
 	r.mu.Unlock()
 }
 
-func (r *sessionRecorder) finalize(code int) error {
+func (r *sessionRecorder) finalize(failed bool) error {
 	if r == nil {
 		return nil
 	}
 
 	var finalizeErr error
 	r.finalizeOnce.Do(func() {
-		r.logExit(code)
+		r.logExit(failed)
 
 		r.mu.Lock()
 		metadata := r.metadata
@@ -302,16 +316,8 @@ func (r *sessionRecorder) finalize(code int) error {
 	return finalizeErr
 }
 
-func (r *sessionRecorder) FinalizeSuccess() error {
-	return r.finalize(0)
-}
-
-func (r *sessionRecorder) FinalizeError() error {
-	return r.finalize(1)
-}
-
-func (r *sessionRecorder) Finalize(code int) error {
-	return r.finalize(code)
+func (r *sessionRecorder) Finalize(failed bool) error {
+	return r.finalize(failed)
 }
 
 func (r *sessionRecorder) UnaryInterceptor() grpc.UnaryClientInterceptor {

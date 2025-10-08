@@ -172,7 +172,7 @@ func printRespJSON(resp proto.Message) {
 func fatal(err error) {
 	term.Errorf("[loop] %v\n", err)
 	if sessionRec != nil {
-		if finalizeErr := sessionRec.Finalize(1); finalizeErr != nil {
+		if finalizeErr := sessionRec.Finalize(true); finalizeErr != nil {
 			term.Errorf("[loop] unable to finalize session: %v\n", finalizeErr)
 		}
 	}
@@ -206,7 +206,7 @@ func main() {
 	}
 
 	if sessionRec != nil {
-		if err := sessionRec.Finalize(0); err != nil {
+		if err := sessionRec.Finalize(false); err != nil {
 			term.Errorf("[loop] unable to finalize session: %v\n", err)
 		}
 	}

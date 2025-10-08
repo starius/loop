@@ -13,7 +13,7 @@
     "start_time": "2025-10-08T01:57:10.397140785-03:00",
     "work_dir": "/home/user/loop",
     "version": "0.31.2-beta commit=looprpc/v1.0.9-60-g018a6194a2d034cfd8e483b92e28f5f6269b1653-dirty commit_hash=018a6194a2d034cfd8e483b92e28f5f6269b1653",
-    "exit_code": 0,
+    "failed": false,
     "duration": 2418852441
   },
   "events": [
@@ -194,7 +194,7 @@
       "time_ms": 2418,
       "kind": "exit",
       "data": {
-        "code": 0
+        "failed": false
       }
     }
   ]
