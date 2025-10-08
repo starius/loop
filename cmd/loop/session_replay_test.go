@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 //go:embed testdata/sessions
@@ -21,11 +23,11 @@ func TestRecordedSessions(t *testing.T) {
 		if errors.Is(err, fs.ErrNotExist) {
 			t.Skip("no recorded sessions present")
 		}
-		t.Fatalf("read sessions dir: %v", err)
+		require.NoError(t, err)
 	}
 
 	var sessionFiles []string
-	err := fs.WalkDir(embeddedSessions, sessionsRoot, func(path string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(embeddedSessions, sessionsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -37,9 +39,7 @@ func TestRecordedSessions(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk sessions: %v", err)
-	}
+	require.NoError(t, walkErr)
 	if len(sessionFiles) == 0 {
 		t.Skip("no recorded sessions present")
 	}
@@ -53,9 +53,7 @@ func TestRecordedSessions(t *testing.T) {
 
 		t.Run(relName, func(t *testing.T) {
 			replay, err := loadRecordedSessionFS(embeddedSessions, path)
-			if err != nil {
-				t.Fatalf("load session: %v", err)
-			}
+			require.NoError(t, err)
 
 			stdinBuf := bytes.NewBufferString(replay.stdin)
 			var stdoutBuf bytes.Buffer
@@ -82,17 +80,13 @@ func TestRecordedSessions(t *testing.T) {
 				term.Errorf("[loop] %v\n", err)
 			}
 
-			if replay.exitCode != nil && exitCode != *replay.exitCode {
-				t.Fatalf("unexpected exit code %d, want %d", exitCode, *replay.exitCode)
+			if replay.exitCode != nil {
+				require.Equal(t, *replay.exitCode, exitCode, "exit code mismatch")
 			}
 
-			if stdoutBuf.String() != replay.stdout {
-				t.Fatalf("stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", stdoutBuf.String(), replay.stdout)
-			}
+			require.Equal(t, replay.stdout, stdoutBuf.String(), "stdout mismatch")
 
-			if stderrBuf.String() != replay.stderr {
-				t.Fatalf("stderr mismatch\n--- got ---\n%s\n--- want ---\n%s", stderrBuf.String(), replay.stderr)
-			}
+			require.Equal(t, replay.stderr, stderrBuf.String(), "stderr mismatch")
 		})
 	}
 }
