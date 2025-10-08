@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,10 @@ var sessionUpdateCommand = &cli.Command{
 		&cli.BoolFlag{
 			Name:  "stdout",
 			Usage: "mirror stdout/stderr while replaying",
+		},
+		&cli.BoolFlag{
+			Name:  "all",
+			Usage: "update all session recordings under testdata/sessions",
 		},
 	},
 	Action: updateSession,
@@ -191,6 +196,16 @@ func prettifyJSON(raw json.RawMessage) string {
 }
 
 func updateSession(ctx context.Context, cmd *cli.Command) error {
+	if cmd.Bool("all") {
+		if cmd.NArg() != 0 {
+			return errors.New("--all cannot be combined with positional arguments")
+		}
+		if cmd.Bool("stdout") || cmd.IsSet("output") {
+			return errors.New("--all cannot be combined with --stdout or --output")
+		}
+		return updateAllSessions(ctx, cmd)
+	}
+
 	if cmd.NArg() != 1 {
 		return showCommandHelp(ctx, cmd)
 	}
@@ -205,6 +220,11 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	stdoutMode := cmd.Bool("stdout")
+	if stdoutMode && cmd.IsSet("output") {
+		return errors.New("--stdout cannot be combined with --output")
+	}
+
 	destPath := srcAbs
 	if cmd.IsSet("output") {
 		destPath = cmd.String("output")
@@ -217,82 +237,17 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 				return err
 			}
 		}
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			return err
+		}
 	}
 
-	replay, err := loadRecordedSessionPath(srcPath)
-	if err != nil {
-		return err
+	if stdoutMode {
+		destPath = ""
 	}
 
-	restoreEnv := applyEnv(replay.env)
-	defer restoreEnv()
-
-	prevRecordEnv, prevRecordSet := os.LookupEnv(sessionEnvVar)
-	if err := os.Setenv(sessionEnvVar, destPath); err != nil {
-		return err
-	}
-	recorder, err := newSessionRecorder(replay.args)
-	if !prevRecordSet {
-		_ = os.Unsetenv(sessionEnvVar)
-	} else {
-		_ = os.Setenv(sessionEnvVar, prevRecordEnv)
-	}
-	if err != nil {
-		return err
-	}
-	sessionRec = recorder
-
-	prevDialer := withClientDialer(&replayDialer{conn: replay.conn})
-	defer prevDialer()
-
-	prevTerm := term
-	defer func() { term = prevTerm }()
-
-	prevSession := sessionRec
-	defer func() { sessionRec = prevSession }()
-
-	stdoutSink := io.Discard
-	stderrSink := io.Discard
-	if cmd.Bool("stdout") {
-		stdoutSink = os.Stdout
-		stderrSink = os.Stderr
-	}
-
-	stdinReader := bytes.NewBufferString(replay.stdin)
-	term = newTerminal(
-		sessionRec.WrapReader(eventStdin, stdinReader),
-		sessionRec.WrapWriter(eventStdout, stdoutSink),
-		sessionRec.WrapWriter(eventStderr, stderrSink),
-	)
-
-	runCtx := context.Background()
-	runCtx = sessionRec.InjectContext(runCtx)
-
-	originalRoot := cmd.Root()
-	if originalRoot == nil {
-		return errors.New("session update requires root command context")
-	}
-	root := cloneCommand(originalRoot, 0)
-	runErr := root.Run(runCtx, replay.args)
-	failed := runErr != nil
-
-	if replay.failed != nil && failed != *replay.failed {
-		return fmt.Errorf(
-			"failure flag changed from %t to %t", *replay.failed, failed,
-		)
-	}
-
-	if err := sessionRec.Finalize(failed); err != nil {
-		return fmt.Errorf("finalize session: %w", err)
-	}
-
-	if runErr != nil {
-		prevTerm.Errorf("[loop] session replay returned error: %v\n", runErr)
-	}
-
-	prevTerm.Printf("updated session written to %s\n", destPath)
-
-	return nil
+	return performSessionUpdate(ctx, cmd, srcAbs, destPath, stdoutMode)
 }
 
 func resolveSessionPath(arg string) (string, error) {
@@ -317,4 +272,131 @@ func resolveSessionPath(arg string) (string, error) {
 	}
 
 	return "", fmt.Errorf("session file %s not found", arg)
+}
+
+func updateAllSessions(ctx context.Context, cmd *cli.Command) error {
+	var files []string
+	err := filepath.WalkDir(sessionDefaultDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != sessionFileExt {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	sort.Strings(files)
+	if len(files) == 0 {
+		term.Println("no session files found")
+		return nil
+	}
+
+	for _, path := range files {
+		if err := performSessionUpdate(ctx, cmd, path, path, false); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPath string, stdoutOnly bool) error {
+	replay, err := loadRecordedSessionPath(srcPath)
+	if err != nil {
+		return err
+	}
+
+	restoreEnv := applyEnv(replay.env)
+	defer restoreEnv()
+
+	prevDialer := withClientDialer(&replayDialer{conn: replay.conn})
+	defer prevDialer()
+
+	prevDeterministic := forceDeterministicJSON
+	forceDeterministicJSON = true
+	defer func() { forceDeterministicJSON = prevDeterministic }()
+
+	stdinBuf := bytes.NewBufferString(replay.stdin)
+	stdoutSink := io.Discard
+	stderrSink := io.Discard
+
+	prevTerm := term
+	prevSession := sessionRec
+	defer func() {
+		term = prevTerm
+		sessionRec = prevSession
+	}()
+
+	if stdoutOnly {
+		stdoutSink = os.Stdout
+		stderrSink = os.Stderr
+		sessionRec = nil
+	} else {
+		prevRecordEnv, prevRecordSet := os.LookupEnv(sessionEnvVar)
+		if err := os.Setenv(sessionEnvVar, destPath); err != nil {
+			return err
+		}
+		recorder, err := newSessionRecorder(replay.args)
+		if !prevRecordSet {
+			_ = os.Unsetenv(sessionEnvVar)
+		} else {
+			_ = os.Setenv(sessionEnvVar, prevRecordEnv)
+		}
+		if err != nil {
+			return err
+		}
+		sessionRec = recorder
+		stdoutSink = sessionRec.WrapWriter(eventStdout, stdoutSink)
+		stderrSink = sessionRec.WrapWriter(eventStderr, stderrSink)
+		stdinBuf = bytes.NewBufferString(replay.stdin)
+}
+
+	reader := io.Reader(stdinBuf)
+	if sessionRec != nil {
+		reader = sessionRec.WrapReader(eventStdin, reader)
+	}
+
+	term = newTerminal(reader, stdoutSink, stderrSink)
+
+	runCtx := ctx
+	if sessionRec != nil {
+		runCtx = sessionRec.InjectContext(runCtx)
+	}
+
+	rootCmd := cmd.Root()
+	if rootCmd == nil {
+		return errors.New("session update requires root command context")
+	}
+	root := cloneCommand(rootCmd, 0)
+	runErr := root.Run(runCtx, replay.args)
+	failed := runErr != nil
+	if failed {
+		term.Errorf("[loop] %v\n", runErr)
+	}
+
+	if replay.failed != nil && failed != *replay.failed {
+		msg := fmt.Sprintf("failure flag changed from %t to %t", *replay.failed, failed)
+		if stdoutOnly {
+			term.Println(msg)
+		} else {
+			return errors.New(msg)
+		}
+	}
+
+	if sessionRec != nil {
+		if err := sessionRec.Finalize(failed); err != nil {
+			return fmt.Errorf("finalize session: %w", err)
+		}
+		prevTerm.Printf("updated session written to %s\n", destPath)
+	}
+
+	return runErr
 }

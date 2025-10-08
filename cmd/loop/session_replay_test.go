@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"embed"
 	"errors"
 	"io/fs"
 	"path/filepath"
@@ -13,13 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//go:embed testdata/sessions
-var embeddedSessions embed.FS
-
 func TestRecordedSessions(t *testing.T) {
-	const sessionsRoot = "testdata/sessions"
-
-	if _, err := fs.ReadDir(embeddedSessions, sessionsRoot); err != nil {
+	if _, err := fs.ReadDir(sessionsFS, sessionsRootDir); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			t.Skip("no recorded sessions present")
 		}
@@ -27,7 +21,7 @@ func TestRecordedSessions(t *testing.T) {
 	}
 
 	var sessionFiles []string
-	walkErr := fs.WalkDir(embeddedSessions, sessionsRoot, func(path string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(sessionsFS, sessionsRootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -46,7 +40,7 @@ func TestRecordedSessions(t *testing.T) {
 
 	for _, path := range sessionFiles {
 		path := path
-		relName := strings.TrimPrefix(path, sessionsRoot+"/")
+		relName := strings.TrimPrefix(path, sessionsRootDir+"/")
 		if relName == "" {
 			relName = filepath.Base(path)
 		}
@@ -56,7 +50,7 @@ func TestRecordedSessions(t *testing.T) {
 			forceDeterministicJSON = true
 			defer func() { forceDeterministicJSON = prevDeterministic }()
 
-			replay, err := loadRecordedSessionFS(embeddedSessions, path)
+			replay, err := loadRecordedSessionFS(sessionsFS, path)
 			require.NoError(t, err)
 
 			stdinBuf := bytes.NewBufferString(replay.stdin)
