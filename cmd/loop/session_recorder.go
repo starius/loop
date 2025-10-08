@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/lightninglabs/loop"
-	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -419,51 +418,17 @@ func deriveSessionSlug(args []string) string {
 	base := filepath.Base(args[0])
 	tokens := []string{base}
 
-	root := newRootCommand()
-	if root == nil {
-		return sanitizeSlug(strings.Join(tokens, "-"))
-	}
-
-	current := root
-
 	for _, arg := range args[1:] {
 		if strings.HasPrefix(arg, "-") {
 			break
 		}
-
-		if current == nil {
-			break
+		if arg == "" {
+			continue
 		}
-
-		next := findSubcommand(current, arg)
-		if next == nil {
-			break
-		}
-
-		tokens = append(tokens, next.Name)
-		current = next
+		tokens = append(tokens, arg)
 	}
 
 	return sanitizeSlug(strings.Join(tokens, "-"))
-}
-
-func findSubcommand(cmd *cli.Command, name string) *cli.Command {
-	lower := strings.ToLower(name)
-	for _, child := range cmd.Commands {
-		if strings.EqualFold(child.Name, name) || containsFold(child.Aliases, lower) {
-			return child
-		}
-	}
-	return nil
-}
-
-func containsFold(values []string, target string) bool {
-	for _, v := range values {
-		if strings.EqualFold(v, target) {
-			return true
-		}
-	}
-	return false
 }
 
 func sanitizeSlug(value string) string {
