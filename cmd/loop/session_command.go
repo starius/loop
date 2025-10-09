@@ -300,7 +300,11 @@ func updateAllSessions(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	for _, path := range files {
-		if err := performSessionUpdate(ctx, cmd, path, path, false); err != nil {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		if err := performSessionUpdate(ctx, cmd, absPath, absPath, false); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -309,7 +313,12 @@ func updateAllSessions(ctx context.Context, cmd *cli.Command) error {
 }
 
 func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPath string, stdoutOnly bool) error {
-	replay, err := loadRecordedSessionPath(srcPath)
+	srcAbs, err := filepath.Abs(srcPath)
+	if err != nil {
+		return err
+	}
+
+	replay, err := loadRecordedSessionPath(srcAbs)
 	if err != nil {
 		return err
 	}
@@ -340,8 +349,12 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 		stderrSink = os.Stderr
 		sessionRec = nil
 	} else {
+		destAbs, err := filepath.Abs(destPath)
+		if err != nil {
+			return err
+		}
 		prevRecordEnv, prevRecordSet := os.LookupEnv(sessionEnvVar)
-		if err := os.Setenv(sessionEnvVar, destPath); err != nil {
+		if err := os.Setenv(sessionEnvVar, destAbs); err != nil {
 			return err
 		}
 		recorder, err := newSessionRecorder(replay.args)
@@ -356,8 +369,7 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 		sessionRec = recorder
 		stdoutSink = sessionRec.WrapWriter(eventStdout, stdoutSink)
 		stderrSink = sessionRec.WrapWriter(eventStderr, stderrSink)
-		stdinBuf = bytes.NewBufferString(replay.stdin)
-}
+	}
 
 	reader := io.Reader(stdinBuf)
 	if sessionRec != nil {
