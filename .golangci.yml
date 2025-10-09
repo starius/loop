@@ -70,6 +70,15 @@ linters:
     whitespace:
       multi-if: true
       multi-func: true
+    forbidigo:
+      forbid:
+        # Forbig using fmt.Scan directly in cmd/loop. Use term.Scan.
+        - pattern: ^fmt\\.Scan(|f|ln)$
+          pkg: ^github.com/lightninglabs/loop/cmd/loop$
+
+        # Default pattern.
+        - pattern: ^(fmt\\.Print(|f|ln)|print|println)$
+
   exclusions:
     generated: lax
     presets:
@@ -95,8 +104,10 @@ linters:
         path: loopd/*
       - linters:
           - errcheck
-          - forbidigo
         path: cmd/loop/*
+      - linters:
+          - forbidigo
+        path: cmd/loop/terminal.go
       - linters:
           - forbidigo
         path: fsm/stateparser/*
