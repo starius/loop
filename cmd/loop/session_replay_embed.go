@@ -4,12 +4,18 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 )
 
 //go:embed testdata/sessions
 var embeddedSessions embed.FS
 
-var sessionsFS fs.FS = embeddedSessions
+var sessionsFS = func() fs.FS {
+	sub, err := fs.Sub(embeddedSessions, "testdata/sessions")
+	if err != nil {
+		panic(fmt.Sprintf("fs.Sub failed: %v", err))
+	}
 
-const sessionsRootDir = "testdata/sessions"
+	return sub
+}()

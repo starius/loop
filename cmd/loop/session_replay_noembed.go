@@ -3,10 +3,26 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
+	"path"
+	"runtime"
 )
 
-var sessionsFS fs.FS = os.DirFS("cmd/loop")
+var sessionsFS = func() fs.FS {
+	// Find the location of cmd/loop source dir.
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("No caller information")
+	}
+	loopDir := path.Dir(filename)
 
-const sessionsRootDir = "testdata/sessions"
+	cmdLoopFS := os.DirFS(loopDir)
+	sub, err := fs.Sub(cmdLoopFS, "testdata/sessions")
+	if err != nil {
+		panic(fmt.Sprintf("fs.Sub failed: %v", err))
+	}
+
+	return sub
+}()

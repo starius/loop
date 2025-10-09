@@ -24,12 +24,12 @@ const (
 	sessionFileExt    = ".json"
 )
 
-const(
-	eventStdout       = "stdout"
-	eventStderr       = "stderr"
-	eventStdin        = "stdin"
-	eventGrpc         = "grpc"
-	eventExit         = "exit"
+const (
+	eventStdout = "stdout"
+	eventStderr = "stderr"
+	eventStdin  = "stdin"
+	eventGrpc   = "grpc"
+	eventExit   = "exit"
 )
 
 type sessionRecorder struct {
@@ -126,10 +126,11 @@ func collectSessionEnv() map[string]string {
 		if key == sessionEnvVar {
 			continue
 		}
-		if strings.HasPrefix(key, "LOOPCLI_") || strings.HasPrefix(key, "LOOP_") {
+		if strings.HasPrefix(key, "LOOPCLI_") {
 			env[key] = value
 		}
 	}
+
 	return env
 }
 
@@ -138,6 +139,7 @@ func getWorkingDir() string {
 	if err != nil {
 		return ""
 	}
+
 	return wd
 }
 
@@ -148,47 +150,31 @@ func (r *sessionRecorder) resolveFilePath(dest string) (string, string) {
 		slug = "session"
 	}
 
-	defaultName := fmt.Sprintf("session-%s-%s%s", timestamp, slug, sessionFileExt)
-	baseDir := sessionDefaultDir
-
-	switch {
-	case dest == "" || dest == "auto":
-		return baseDir, defaultName
-
-	case filepath.IsAbs(dest):
-		name := dest
-		if filepath.Ext(name) == "" {
-			name += sessionFileExt
-		}
-		return filepath.Dir(name), filepath.Base(name)
-
-	case strings.Count(dest, "/") == 1:
-		parts := strings.SplitN(dest, "/", 2)
-		subdir, action := parts[0], parts[1]
-		if subdir != "" && action != "" && !strings.ContainsRune(subdir, os.PathSeparator) && !strings.ContainsRune(action, os.PathSeparator) {
-			filename := fmt.Sprintf("session-%s-%s_%s%s", timestamp, slug, action, sessionFileExt)
-			return filepath.Join(baseDir, subdir), filename
-		}
-
-	case strings.ContainsRune(dest, os.PathSeparator):
-		name := dest
-		if filepath.Ext(name) == "" {
-			name += sessionFileExt
-		}
-		full := filepath.Join(sessionDefaultDir, name)
-		return filepath.Dir(full), filepath.Base(full)
+	parts := strings.Split(dest, "/")
+	var subdir, action string
+	if len(parts) == 2 {
+		subdir, action = parts[0], parts[1]
 	}
 
-	// Treat remaining values as action suffixes.
-	filename := fmt.Sprintf("session-%s-%s_%s%s", timestamp, slug, dest, sessionFileExt)
-	return baseDir, filename
+	nameParts := []string{
+		"session",
+		timestamp,
+		slug,
+	}
+	if action != "" {
+		nameParts = append(nameParts, action)
+	}
+	name := strings.Join(nameParts, "_") + ".json"
+
+	baseDir := sessionDefaultDir
+	if subdir != "" {
+		baseDir = filepath.Join(baseDir, subdir)
+	}
+
+	return baseDir, name
 }
 
 func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
-	if r == nil {
-		return
-	}
-
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -206,10 +192,6 @@ func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
 }
 
 func (r *sessionRecorder) WrapWriter(kind string, writer io.Writer) io.Writer {
-	if r == nil {
-		return writer
-	}
-
 	return &recordingWriter{
 		recorder: r,
 		kind:     kind,
@@ -218,10 +200,6 @@ func (r *sessionRecorder) WrapWriter(kind string, writer io.Writer) io.Writer {
 }
 
 func (r *sessionRecorder) WrapReader(kind string, reader io.Reader) io.Reader {
-	if r == nil {
-		return reader
-	}
-
 	return &recordingReader{
 		recorder: r,
 		kind:     kind,
@@ -241,6 +219,7 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 		payload := textPayload{Text: string(p[:n])}
 		w.recorder.logEvent(w.kind, payload)
 	}
+
 	return n, err
 }
 
@@ -253,17 +232,20 @@ type recordingReader struct {
 func (rdr *recordingReader) Read(p []byte) (int, error) {
 	n, err := rdr.inner.Read(p)
 	if n > 0 {
-		rdr.recorder.logEvent(rdr.kind, stdinPayload{Text: string(p[:n])})
+		rdr.recorder.logEvent(
+			rdr.kind, stdinPayload{
+				Text: string(p[:n]),
+			},
+		)
 	}
+
 	return n, err
 }
 
 func (r *sessionRecorder) logExit(failed bool) {
-	if r == nil {
-		return
-	}
-
-	r.logEvent(eventExit, exitPayload{Failed: failed})
+	r.logEvent(eventExit, exitPayload{
+		Failed: failed,
+	})
 
 	duration := time.Since(r.started)
 	r.mu.Lock()
@@ -274,10 +256,6 @@ func (r *sessionRecorder) logExit(failed bool) {
 }
 
 func (r *sessionRecorder) finalize(failed bool) error {
-	if r == nil {
-		return nil
-	}
-
 	var finalizeErr error
 	r.finalizeOnce.Do(func() {
 		r.logExit(failed)
@@ -298,12 +276,14 @@ func (r *sessionRecorder) finalize(failed bool) error {
 		err := os.MkdirAll(filepath.Dir(r.filePath), 0o755)
 		if err != nil {
 			finalizeErr = err
+
 			return
 		}
 
 		file, err := os.Create(r.filePath)
 		if err != nil {
 			finalizeErr = err
+
 			return
 		}
 		defer file.Close()
@@ -312,6 +292,7 @@ func (r *sessionRecorder) finalize(failed bool) error {
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(fileContent); err != nil {
 			finalizeErr = err
+
 			return
 		}
 	})
@@ -324,33 +305,34 @@ func (r *sessionRecorder) Finalize(failed bool) error {
 }
 
 func (r *sessionRecorder) UnaryInterceptor() grpc.UnaryClientInterceptor {
-	if r == nil {
-		return nil
-	}
+	return func(ctx context.Context, method string, req, reply interface{},
+		cc *grpc.ClientConn, invoker grpc.UnaryInvoker,
+		opts ...grpc.CallOption) error {
 
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		r.logGRPCMessage(method, "request", req, nil)
 
 		err := invoker(ctx, method, req, reply, cc, opts...)
 		if err != nil {
 			r.logGRPCMessage(method, "error", nil, err)
+
 			return err
 		}
 
 		r.logGRPCMessage(method, "response", reply, nil)
+
 		return nil
 	}
 }
 
 func (r *sessionRecorder) StreamInterceptor() grpc.StreamClientInterceptor {
-	if r == nil {
-		return nil
-	}
+	return func(ctx context.Context, desc *grpc.StreamDesc,
+		cc *grpc.ClientConn, method string, streamer grpc.Streamer,
+		opts ...grpc.CallOption) (grpc.ClientStream, error) {
 
-	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		clientStream, err := streamer(ctx, desc, cc, method, opts...)
 		if err != nil {
 			r.logGRPCMessage(method, "error", nil, err)
+
 			return nil, err
 		}
 
@@ -388,16 +370,15 @@ func (s *recordingClientStream) RecvMsg(m interface{}) error {
 	return nil
 }
 
-func (r *sessionRecorder) logGRPCMessage(method, event string, msg interface{}, receptionErr error) {
-	if r == nil {
-		return
-	}
+func (r *sessionRecorder) logGRPCMessage(method, event string, msg interface{},
+	receptionErr error) {
 
 	payload := grpcPayload{Method: method, Event: event}
 
 	if receptionErr != nil {
 		payload.Error = receptionErr.Error()
 		r.logEvent(eventGrpc, payload)
+
 		return
 	}
 
@@ -424,7 +405,9 @@ func (r *sessionRecorder) InjectContext(ctx context.Context) context.Context {
 		return ctx
 	}
 
-	return metadata.AppendToOutgoingContext(ctx, "loop-session", filepath.Base(r.filePath))
+	return metadata.AppendToOutgoingContext(
+		ctx, "loop-session", filepath.Base(r.filePath),
+	)
 }
 
 func deriveSessionSlug(args []string) string {
