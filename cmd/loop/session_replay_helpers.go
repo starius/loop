@@ -20,13 +20,13 @@ import (
 )
 
 type recordedSession struct {
-	args   []string
-	env    map[string]string
-	stdin  string
-	stdout string
-	stderr string
-	failed *bool
-	conn   *recordedClientConn
+	args     []string
+	env      map[string]string
+	stdin    string
+	stdout   string
+	stderr   string
+	runError *string
+	conn     *recordedClientConn
 }
 
 func loadRecordedSessionFS(fsys fs.FS, path string) (*recordedSession, error) {
@@ -56,9 +56,9 @@ func parseRecordedSession(blob []byte) (*recordedSession, error) {
 	}
 
 	replay := &recordedSession{
-		args:   append([]string(nil), data.Metadata.Args...),
-		env:    data.Metadata.Env,
-		failed: data.Metadata.Failed,
+		args:     append([]string(nil), data.Metadata.Args...),
+		env:      data.Metadata.Env,
+		runError: data.Metadata.RunError,
 	}
 
 	var stdoutBuilder strings.Builder

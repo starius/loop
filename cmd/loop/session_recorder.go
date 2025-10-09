@@ -52,7 +52,7 @@ type sessionMetadata struct {
 	StartTime time.Time         `json:"start_time"`
 	WorkDir   string            `json:"work_dir"`
 	Version   string            `json:"version"`
-	Failed    *bool             `json:"failed,omitempty"`
+	RunError  *string           `json:"run_error,omitempty"`
 	Duration  *time.Duration    `json:"duration,omitempty"`
 }
 
@@ -79,7 +79,7 @@ type grpcPayload struct {
 }
 
 type exitPayload struct {
-	Failed bool `json:"failed"`
+	RunError *string `json:"run_error,omitempty"`
 }
 
 func newSessionRecorder(args []string) (*sessionRecorder, error) {
@@ -241,23 +241,31 @@ func (rdr *recordingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *sessionRecorder) logExit(failed bool) {
-	r.logEvent(eventExit, exitPayload{
-		Failed: failed,
-	})
+func (r *sessionRecorder) logExit(runErr error) {
+	var payload exitPayload
+	if runErr != nil {
+		msg := runErr.Error()
+		payload.RunError = &msg
+	}
+
+	r.logEvent(eventExit, payload)
 
 	duration := time.Since(r.started)
 	r.mu.Lock()
-	failedCopy := failed
-	r.metadata.Failed = &failedCopy
+	if runErr != nil {
+		msg := runErr.Error()
+		r.metadata.RunError = &msg
+	} else {
+		r.metadata.RunError = nil
+	}
 	r.metadata.Duration = &duration
 	r.mu.Unlock()
 }
 
-func (r *sessionRecorder) finalize(failed bool) error {
+func (r *sessionRecorder) finalize(runErr error) error {
 	var finalizeErr error
 	r.finalizeOnce.Do(func() {
-		r.logExit(failed)
+		r.logExit(runErr)
 
 		r.mu.Lock()
 		metadata := r.metadata
@@ -299,8 +307,8 @@ func (r *sessionRecorder) finalize(failed bool) error {
 	return finalizeErr
 }
 
-func (r *sessionRecorder) Finalize(failed bool) error {
-	return r.finalize(failed)
+func (r *sessionRecorder) Finalize(runErr error) error {
+	return r.finalize(runErr)
 }
 
 func (r *sessionRecorder) UnaryInterceptor() grpc.UnaryClientInterceptor {

@@ -135,7 +135,11 @@ func displayEvent(ts time.Duration, event sessionEvent) error {
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			return err
 		}
-		term.Printf("[%s] exit failed=%t\n", timestamp, payload.Failed)
+		if payload.RunError != nil {
+			term.Printf("[%s] exit error=%q\n", timestamp, *payload.RunError)
+		} else {
+			term.Printf("[%s] exit ok\n", timestamp)
+		}
 	default:
 		return errors.New("unknown event kind: " + event.Kind)
 	}
@@ -232,10 +236,11 @@ func updateSession(ctx context.Context, cmd *cli.Command) error {
 			destPath += sessionFileExt
 		}
 		if !filepath.IsAbs(destPath) {
-			destPath, err = filepath.Abs(destPath)
+			destAbs, err := filepath.Abs(destPath)
 			if err != nil {
 				return err
 			}
+			destPath = destAbs
 		}
 
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
@@ -369,6 +374,7 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 		sessionRec = recorder
 		stdoutSink = sessionRec.WrapWriter(eventStdout, stdoutSink)
 		stderrSink = sessionRec.WrapWriter(eventStderr, stderrSink)
+		destPath = destAbs
 	}
 
 	reader := io.Reader(stdinBuf)
@@ -389,13 +395,33 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 	}
 	root := cloneCommand(rootCmd, 0)
 	runErr := root.Run(runCtx, replay.args)
-	failed := runErr != nil
-	if failed {
+	if runErr != nil {
 		term.Errorf("[loop] %v\n", runErr)
 	}
 
-	if replay.failed != nil && failed != *replay.failed {
-		msg := fmt.Sprintf("failure flag changed from %t to %t", *replay.failed, failed)
+	var runErrMsg *string
+	if runErr != nil {
+		msg := runErr.Error()
+		runErrMsg = &msg
+	}
+
+	switch {
+	case replay.runError == nil && runErrMsg != nil:
+		msg := fmt.Sprintf("run error changed from <nil> to %q", *runErrMsg)
+		if stdoutOnly {
+			term.Println(msg)
+		} else {
+			return errors.New(msg)
+		}
+	case replay.runError != nil && runErrMsg == nil:
+		msg := fmt.Sprintf("run error changed from %q to <nil>", *replay.runError)
+		if stdoutOnly {
+			term.Println(msg)
+		} else {
+			return errors.New(msg)
+		}
+	case replay.runError != nil && runErrMsg != nil && *replay.runError != *runErrMsg:
+		msg := fmt.Sprintf("run error changed from %q to %q", *replay.runError, *runErrMsg)
 		if stdoutOnly {
 			term.Println(msg)
 		} else {
@@ -404,7 +430,7 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 	}
 
 	if sessionRec != nil {
-		if err := sessionRec.Finalize(failed); err != nil {
+		if err := sessionRec.Finalize(runErr); err != nil {
 			return fmt.Errorf("finalize session: %w", err)
 		}
 		prevTerm.Printf("updated session written to %s\n", destPath)
