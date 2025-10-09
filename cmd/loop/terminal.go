@@ -19,18 +19,6 @@ func newTerminal(stdin io.Reader, stdout, stderr io.Writer) *terminal {
 	}
 }
 
-func (t *terminal) Reader() io.Reader {
-	return t.stdin
-}
-
-func (t *terminal) Writer() io.Writer {
-	return t.stdout
-}
-
-func (t *terminal) ErrorWriter() io.Writer {
-	return t.stderr
-}
-
 func (t *terminal) Print(args ...interface{}) {
 	fmt.Fprint(t.stdout, args...)
 }
