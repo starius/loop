@@ -22,6 +22,9 @@ const (
 	sessionEnvVar     = "LOOP_SESSION_RECORD"
 	sessionDefaultDir = "cmd/loop/testdata/sessions"
 	sessionFileExt    = ".json"
+)
+
+const(
 	eventStdout       = "stdout"
 	eventStderr       = "stderr"
 	eventStdin        = "stdin"
