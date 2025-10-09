@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io/fs"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 )
 
 func TestRecordedSessions(t *testing.T) {
-	if _, err := fs.ReadDir(sessionsFS, sessionsRootDir); err != nil {
+	if _, err := fs.ReadDir(sessionsFS, "."); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			t.Skip("no recorded sessions present")
 		}
@@ -21,31 +20,28 @@ func TestRecordedSessions(t *testing.T) {
 	}
 
 	var sessionFiles []string
-	walkErr := fs.WalkDir(sessionsFS, sessionsRootDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
+	walkErr := fs.WalkDir(sessionsFS, ".",
+		func(path string, d fs.DirEntry, err error) error {
+
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), sessionFileExt) {
+				sessionFiles = append(sessionFiles, path)
+			}
+
 			return nil
-		}
-		if strings.HasSuffix(d.Name(), sessionFileExt) {
-			sessionFiles = append(sessionFiles, path)
-		}
-		return nil
-	})
+		})
 	require.NoError(t, walkErr)
 	if len(sessionFiles) == 0 {
 		t.Skip("no recorded sessions present")
 	}
 
 	for _, path := range sessionFiles {
-		path := path
-		relName := strings.TrimPrefix(path, sessionsRootDir+"/")
-		if relName == "" {
-			relName = filepath.Base(path)
-		}
-
-		t.Run(relName, func(t *testing.T) {
+		t.Run(path, func(t *testing.T) {
 			prevDeterministic := forceDeterministicJSON
 			forceDeterministicJSON = true
 			defer func() { forceDeterministicJSON = prevDeterministic }()
