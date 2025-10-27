@@ -149,6 +149,14 @@ func getWorkingDir() string {
 }
 
 func (r *sessionRecorder) resolveFilePath(dest string) (string, string) {
+	if dest != "" && strings.HasSuffix(dest, sessionFileExt) {
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(sessionDefaultDir, dest)
+		}
+
+		return filepath.Dir(dest), filepath.Base(dest)
+	}
+
 	timestamp := r.started.Format("20060102-150405")
 	slug := r.slug
 	if slug == "" {
