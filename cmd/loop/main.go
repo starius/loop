@@ -187,12 +187,12 @@ func main() {
 	}
 
 	if sessionRec != nil {
-		term = newTerminal(
-			sessionRec.WrapReader(eventStdin, os.Stdin),
-			sessionRec.WrapWriter(eventStdout, os.Stdout),
-			sessionRec.WrapWriter(eventStderr, os.Stderr),
-		)
+		if err := sessionRec.Start(nil, nil, nil); err != nil {
+			fatal(err)
+		}
 	}
+
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
 
 	rootCmd := newRootCommand()
 

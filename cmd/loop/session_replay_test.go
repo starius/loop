@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"strings"
 	"testing"
 
@@ -49,12 +50,33 @@ func TestRecordedSessions(t *testing.T) {
 			replay, err := loadRecordedSessionFS(sessionsFS, path)
 			require.NoError(t, err)
 
-			stdinBuf := bytes.NewBufferString(replay.stdin)
 			var stdoutBuf bytes.Buffer
 			var stderrBuf bytes.Buffer
 
+			stdoutUnhook, err := hookStdout(os.Stdout, nil, func(p []byte) {
+				stdoutBuf.Write(p)
+			})
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, stdoutUnhook())
+			}()
+
+			stderrUnhook, err := hookStderr(os.Stderr, nil, func(p []byte) {
+				stderrBuf.Write(p)
+			})
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, stderrUnhook())
+			}()
+
+			stdinUnhook, err := hookStdin(os.Stdin, bytes.NewBufferString(replay.stdin), nil)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, stdinUnhook())
+			}()
+
 			prevTerm := term
-			term = newTerminal(stdinBuf, &stdoutBuf, &stderrBuf)
+			term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
 			defer func() { term = prevTerm }()
 
 			restoreDialer := withClientDialer(&replayDialer{conn: replay.conn})

@@ -341,6 +341,7 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 	stdinBuf := bytes.NewBufferString(replay.stdin)
 	stdoutSink := io.Discard
 	stderrSink := io.Discard
+	var stdinUnhook func() error
 
 	prevTerm := term
 	prevSession := sessionRec
@@ -372,17 +373,35 @@ func performSessionUpdate(ctx context.Context, cmd *cli.Command, srcPath, destPa
 			return err
 		}
 		sessionRec = recorder
-		stdoutSink = sessionRec.WrapWriter(eventStdout, stdoutSink)
-		stderrSink = sessionRec.WrapWriter(eventStderr, stderrSink)
 		destPath = destAbs
 	}
 
-	reader := io.Reader(stdinBuf)
 	if sessionRec != nil {
-		reader = sessionRec.WrapReader(eventStdin, reader)
+		if err := sessionRec.Start(stdinBuf, stdoutSink, stderrSink); err != nil {
+			return err
+		}
+		stdoutSink = os.Stdout
+		stderrSink = os.Stderr
+	} else {
+		var err error
+		stdinUnhook, err = hookStdin(os.Stdin, stdinBuf, nil)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if stdinUnhook != nil {
+				_ = stdinUnhook()
+			}
+		}()
 	}
 
-	term = newTerminal(reader, stdoutSink, stderrSink)
+	termStdout := stdoutSink
+	termStderr := stderrSink
+	if sessionRec != nil {
+		termStdout = os.Stdout
+		termStderr = os.Stderr
+	}
+	term = newTerminal(os.Stdin, termStdout, termStderr)
 
 	runCtx := ctx
 	if sessionRec != nil {

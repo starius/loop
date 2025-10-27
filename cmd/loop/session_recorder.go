@@ -44,6 +44,12 @@ type sessionRecorder struct {
 	finalized    bool
 
 	marshalOptions protojson.MarshalOptions
+
+	hooksMu      sync.Mutex
+	hooksStarted bool
+	stdoutUnhook func() error
+	stderrUnhook func() error
+	stdinUnhook  func() error
 }
 
 type sessionMetadata struct {
@@ -190,55 +196,88 @@ func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
 	r.mu.Unlock()
 }
 
-func (r *sessionRecorder) WrapWriter(kind string, writer io.Writer) io.Writer {
-	return &recordingWriter{
-		recorder: r,
-		kind:     kind,
-		inner:    writer,
-	}
-}
-
-func (r *sessionRecorder) WrapReader(kind string, reader io.Reader) io.Reader {
-	return &recordingReader{
-		recorder: r,
-		kind:     kind,
-		inner:    reader,
-	}
-}
-
-type recordingWriter struct {
-	recorder *sessionRecorder
-	kind     string
-	inner    io.Writer
-}
-
-func (w *recordingWriter) Write(p []byte) (int, error) {
-	n, err := w.inner.Write(p)
-	if n > 0 {
-		payload := textPayload{Text: string(p[:n])}
-		w.recorder.logEvent(w.kind, payload)
+func (r *sessionRecorder) Start(stdinSource io.Reader, stdoutForward, stderrForward io.Writer) error {
+	if r == nil {
+		return nil
 	}
 
-	return n, err
-}
+	r.hooksMu.Lock()
+	defer r.hooksMu.Unlock()
 
-type recordingReader struct {
-	recorder *sessionRecorder
-	kind     string
-	inner    io.Reader
-}
-
-func (rdr *recordingReader) Read(p []byte) (int, error) {
-	n, err := rdr.inner.Read(p)
-	if n > 0 {
-		rdr.recorder.logEvent(
-			rdr.kind, stdinPayload{
-				Text: string(p[:n]),
-			},
-		)
+	if r.hooksStarted {
+		return nil
 	}
 
-	return n, err
+	origStdout := os.Stdout
+	if stdoutForward == nil {
+		stdoutForward = origStdout
+	}
+	stdoutHook, err := hookStdout(origStdout, stdoutForward, func(p []byte) {
+		r.logEvent(eventStdout, textPayload{Text: string(p)})
+	})
+	if err != nil {
+		return err
+	}
+
+	origStderr := os.Stderr
+	if stderrForward == nil {
+		stderrForward = origStderr
+	}
+	stderrHook, err := hookStderr(origStderr, stderrForward, func(p []byte) {
+		r.logEvent(eventStderr, textPayload{Text: string(p)})
+	})
+	if err != nil {
+		_ = stdoutHook()
+		return err
+	}
+
+	origStdin := os.Stdin
+	if stdinSource == nil {
+		stdinSource = origStdin
+	}
+	stdinHook, err := hookStdin(origStdin, stdinSource, func(p []byte) {
+		r.logEvent(eventStdin, stdinPayload{Text: string(p)})
+	})
+	if err != nil {
+		_ = stderrHook()
+		_ = stdoutHook()
+		return err
+	}
+
+	r.stdoutUnhook = stdoutHook
+	r.stderrUnhook = stderrHook
+	r.stdinUnhook = stdinHook
+	r.hooksStarted = true
+
+	return nil
+}
+
+func (r *sessionRecorder) stopHooks() error {
+	r.hooksMu.Lock()
+	defer r.hooksMu.Unlock()
+
+	var firstErr error
+	if r.stdoutUnhook != nil {
+		if err := r.stdoutUnhook(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		r.stdoutUnhook = nil
+	}
+	if r.stderrUnhook != nil {
+		if err := r.stderrUnhook(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		r.stderrUnhook = nil
+	}
+	if r.stdinUnhook != nil {
+		if err := r.stdinUnhook(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		r.stdinUnhook = nil
+	}
+	r.hooksStarted = false
+
+	return firstErr
 }
 
 func (r *sessionRecorder) logExit(runErr error) {
@@ -265,6 +304,11 @@ func (r *sessionRecorder) logExit(runErr error) {
 func (r *sessionRecorder) finalize(runErr error) error {
 	var finalizeErr error
 	r.finalizeOnce.Do(func() {
+		if err := r.stopHooks(); err != nil {
+			finalizeErr = err
+			return
+		}
+
 		r.logExit(runErr)
 
 		r.mu.Lock()
