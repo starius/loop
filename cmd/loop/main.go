@@ -89,7 +89,8 @@ var (
 		listSwapsCommand, swapInfoCommand, getLiquidityParamsCommand,
 		setLiquidityRuleCommand, suggestSwapCommand, setParamsCommand,
 		getInfoCommand, abandonSwapCommand, reservationsCommands,
-		instantOutCommand, listInstantOutsCommand, stopCommand,
+		instantOutCommand, listInstantOutsCommand, sweepHtlcCommand,
+		stopCommand,
 		printManCommand, printMarkdownCommand,
 	}
 )
