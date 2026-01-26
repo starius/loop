@@ -36,6 +36,7 @@ const (
 	eventStdin  = "stdin"
 	eventGrpc   = "grpc"
 	eventExit   = "exit"
+	eventSignal = "signal"
 )
 
 type sessionRecorder struct {
@@ -91,6 +92,10 @@ type grpcPayload struct {
 
 type exitPayload struct {
 	RunError *string `json:"run_error,omitempty"`
+}
+
+type signalPayload struct {
+	Signal string `json:"signal"`
 }
 
 func newSessionRecorder(args []string) (*sessionRecorder, error) {
@@ -438,6 +443,14 @@ func (r *sessionRecorder) logGRPCMessage(method, event string, msg interface{},
 	}
 
 	r.logEvent(eventGrpc, payload)
+}
+
+func (r *sessionRecorder) LogSignal(sig os.Signal) {
+	if r == nil || sig == nil {
+		return
+	}
+
+	r.logEvent(eventSignal, signalPayload{Signal: sig.String()})
 }
 
 func (r *sessionRecorder) InjectContext(ctx context.Context) context.Context {

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -105,6 +107,38 @@ var (
 
 	cliClock clock.Clock = clock.NewDefaultClock()
 )
+
+func installSessionSignalHandler(cancel context.CancelFunc) (func(), error) {
+	if sessionRec == nil {
+		return func() {}, nil
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		interrupted := false
+		for sig := range sigCh {
+			sessionRec.LogSignal(sig)
+			if !interrupted {
+				interrupted = true
+				cancel()
+				continue
+			}
+
+			_ = sessionRec.Finalize(fmt.Errorf("signal: %s", sig))
+			os.Exit(130)
+		}
+	}()
+
+	return func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+		<-done
+	}, nil
+}
 
 const (
 
@@ -201,8 +235,21 @@ func main() {
 	rootCmd := newRootCommand()
 
 	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	if sessionRec != nil {
 		ctx = sessionRec.InjectContext(ctx)
+	}
+
+	var signalStop func()
+	if sessionRec != nil {
+		var err error
+		signalStop, err = installSessionSignalHandler(cancel)
+		if err != nil {
+			fatal(err)
+		}
+		defer signalStop()
 	}
 
 	if err := rootCmd.Run(ctx, os.Args); err != nil {
