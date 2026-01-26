@@ -27,6 +27,9 @@ const (
 	sessionFileExt    = ".json"
 )
 
+// sessionClockStartUnix is the fixed timestamp used for recorded CLI sessions.
+const sessionClockStartUnix int64 = 1769407086
+
 const (
 	eventStdout = "stdout"
 	eventStderr = "stderr"
@@ -57,13 +60,11 @@ type sessionRecorder struct {
 }
 
 type sessionMetadata struct {
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env"`
-	StartTime time.Time         `json:"start_time"`
-	WorkDir   string            `json:"work_dir"`
-	Version   string            `json:"version"`
-	RunError  *string           `json:"run_error,omitempty"`
-	Duration  *time.Duration    `json:"duration,omitempty"`
+	Args     []string          `json:"args"`
+	Env      map[string]string `json:"env"`
+	Version  string            `json:"version"`
+	RunError *string           `json:"run_error,omitempty"`
+	Duration *time.Duration    `json:"duration,omitempty"`
 }
 
 type sessionEvent struct {
@@ -117,11 +118,9 @@ func newSessionRecorder(args []string) (*sessionRecorder, error) {
 	recorder.slug = deriveSessionSlug(args)
 
 	metadata := sessionMetadata{
-		Args:      append([]string(nil), args...),
-		Env:       collectSessionEnv(),
-		StartTime: recorder.started,
-		WorkDir:   getWorkingDir(),
-		Version:   loop.RichVersion(),
+		Args:    append([]string(nil), args...),
+		Env:     collectSessionEnv(),
+		Version: loop.RichVersion(),
 	}
 	recorder.metadata = metadata
 
@@ -152,15 +151,6 @@ func collectSessionEnv() map[string]string {
 	}
 
 	return env
-}
-
-func getWorkingDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-
-	return wd
 }
 
 func (r *sessionRecorder) resolveFilePath() (string, string, error) {

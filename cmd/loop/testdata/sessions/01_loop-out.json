@@ -9,8 +9,6 @@
       "--fast"
     ],
     "env": {},
-    "start_time": "2026-01-26T00:58:06.555098429-05:00",
-    "work_dir": "/home/user/loop",
     "version": "0.31.7-beta commit=vbump-lndclient-64-g3b735173216470e023b3b72949dd82af9adbebe1 commit_hash=3b735173216470e023b3b72949dd82af9adbebe1",
     "duration": 1332472129
   },

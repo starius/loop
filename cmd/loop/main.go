@@ -190,7 +190,7 @@ func main() {
 	}
 
 	if sessionRec != nil {
-		cliClock = clock.NewTestClock(sessionRec.started)
+		cliClock = clock.NewTestClock(time.Unix(sessionClockStartUnix, 0))
 		if err := sessionRec.Start(nil, nil, nil); err != nil {
 			fatal(err)
 		}

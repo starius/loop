@@ -52,7 +52,6 @@ func (emptyFS) Open(string) (fs.File, error) {
 type recordedSession struct {
 	args     []string
 	env      map[string]string
-	startAt  time.Time
 	stdin    string
 	stdout   string
 	stderr   string
@@ -89,7 +88,6 @@ func parseRecordedSession(blob []byte) (*recordedSession, error) {
 	replay := &recordedSession{
 		args:     append([]string(nil), data.Metadata.Args...),
 		env:      data.Metadata.Env,
-		startAt:  data.Metadata.StartTime,
 		runError: data.Metadata.RunError,
 	}
 
@@ -438,23 +436,14 @@ func TestRecordedSessions(t *testing.T) {
 				stdoutBuf.Write(p)
 			})
 			require.NoErrorf(t, err, "hook stdout for %s", path)
-			defer func() {
-				require.NoErrorf(t, stdoutUnhook(), "unhook stdout for %s", path)
-			}()
 
 			stderrUnhook, err := hookStderr(os.Stderr, nil, func(p []byte) {
 				stderrBuf.Write(p)
 			})
 			require.NoErrorf(t, err, "hook stderr for %s", path)
-			defer func() {
-				require.NoErrorf(t, stderrUnhook(), "unhook stderr for %s", path)
-			}()
 
 			stdinUnhook, err := hookStdin(os.Stdin, bytes.NewBufferString(replay.stdin), nil)
 			require.NoErrorf(t, err, "hook stdin for %s", path)
-			defer func() {
-				require.NoErrorf(t, stdinUnhook(), "unhook stdin for %s", path)
-			}()
 
 			prevTerm := term
 			term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
@@ -466,11 +455,9 @@ func TestRecordedSessions(t *testing.T) {
 			restoreEnv := applyEnv(replay.env)
 			defer restoreEnv()
 
-			var clockToUse clock.Clock = clock.NewTestClock(replay.startAt)
-			if replay.startAt.IsZero() {
-				clockToUse = clock.NewDefaultClock()
-			}
-			restoreClock := withClock(clockToUse)
+			restoreClock := withClock(
+				clock.NewTestClock(time.Unix(sessionClockStartUnix, 0)),
+			)
 			defer restoreClock()
 
 			sessionRec = nil
@@ -481,6 +468,10 @@ func TestRecordedSessions(t *testing.T) {
 			if err != nil {
 				term.Errorf("[loop] %v\n", err)
 			}
+
+			require.NoErrorf(t, stdoutUnhook(), "unhook stdout for %s", path)
+			require.NoErrorf(t, stderrUnhook(), "unhook stderr for %s", path)
+			require.NoErrorf(t, stdinUnhook(), "unhook stdin for %s", path)
 
 			if replay.runError != nil {
 				require.Error(t, err, "expected run error")
