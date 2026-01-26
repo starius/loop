@@ -90,7 +90,7 @@ var (
 		setLiquidityRuleCommand, suggestSwapCommand, setParamsCommand,
 		getInfoCommand, abandonSwapCommand, reservationsCommands,
 		instantOutCommand, listInstantOutsCommand, stopCommand,
-		printManCommand, printMarkdownCommand, sessionCommand,
+		printManCommand, printMarkdownCommand,
 	}
 
 	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)

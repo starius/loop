@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,8 +93,16 @@ type exitPayload struct {
 }
 
 func newSessionRecorder(args []string) (*sessionRecorder, error) {
-	destination := os.Getenv(sessionEnvVar)
-	if destination == "" {
+	envValue, ok := os.LookupEnv(sessionEnvVar)
+	if !ok {
+		return nil, nil
+	}
+
+	enabled, err := strconv.ParseBool(envValue)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s value %q", sessionEnvVar, envValue)
+	}
+	if !enabled {
 		return nil, nil
 	}
 
@@ -113,7 +125,10 @@ func newSessionRecorder(args []string) (*sessionRecorder, error) {
 	}
 	recorder.metadata = metadata
 
-	baseDir, fileName := recorder.resolveFilePath(destination)
+	baseDir, fileName, err := recorder.resolveFilePath()
+	if err != nil {
+		return nil, err
+	}
 	recorder.filePath = filepath.Join(baseDir, fileName)
 
 	return recorder, nil
@@ -148,43 +163,19 @@ func getWorkingDir() string {
 	return wd
 }
 
-func (r *sessionRecorder) resolveFilePath(dest string) (string, string) {
-	if dest != "" && strings.HasSuffix(dest, sessionFileExt) {
-		if !filepath.IsAbs(dest) {
-			dest = filepath.Join(sessionDefaultDir, dest)
-		}
-
-		return filepath.Dir(dest), filepath.Base(dest)
+func (r *sessionRecorder) resolveFilePath() (string, string, error) {
+	counter, err := nextSessionCounter(sessionDefaultDir)
+	if err != nil {
+		return "", "", err
 	}
 
-	timestamp := r.started.Format("20060102-150405")
 	slug := r.slug
 	if slug == "" {
 		slug = "session"
 	}
 
-	parts := strings.Split(dest, "/")
-	var subdir, action string
-	if len(parts) == 2 {
-		subdir, action = parts[0], parts[1]
-	}
-
-	nameParts := []string{
-		"session",
-		timestamp,
-		slug,
-	}
-	if action != "" {
-		nameParts = append(nameParts, action)
-	}
-	name := strings.Join(nameParts, "_") + ".json"
-
-	baseDir := sessionDefaultDir
-	if subdir != "" {
-		baseDir = filepath.Join(baseDir, subdir)
-	}
-
-	return baseDir, name
+	name := fmt.Sprintf("%02d_%s%s", counter, slug, sessionFileExt)
+	return sessionDefaultDir, name, nil
 }
 
 func (r *sessionRecorder) logEvent(kind string, payload interface{}) {
@@ -512,4 +503,60 @@ func sanitizeSlug(value string) string {
 		return "session"
 	}
 	return slug
+}
+
+func nextSessionCounter(baseDir string) (int, error) {
+	maxCounter := 0
+	walkErr := filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(d.Name()) != sessionFileExt {
+			return nil
+		}
+
+		counter, ok := parseSessionCounter(d.Name())
+		if !ok {
+			return nil
+		}
+		if counter > maxCounter {
+			maxCounter = counter
+		}
+		return nil
+	})
+	if errors.Is(walkErr, fs.ErrNotExist) {
+		return 1, nil
+	}
+	if walkErr != nil {
+		return 0, walkErr
+	}
+	return maxCounter + 1, nil
+}
+
+func parseSessionCounter(name string) (int, bool) {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if base == "" {
+		return 0, false
+	}
+
+	var digits strings.Builder
+	for _, r := range base {
+		if r < '0' || r > '9' {
+			break
+		}
+		digits.WriteRune(r)
+	}
+	if digits.Len() == 0 {
+		return 0, false
+	}
+
+	value, err := strconv.Atoi(digits.String())
+	if err != nil {
+		return 0, false
+	}
+
+	return value, true
 }
