@@ -10,13 +10,12 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"reflect"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
@@ -369,94 +368,16 @@ func compareJSONWithContext(method, event string, idx int, actual []byte, record
 		return fmt.Errorf("grpc %s %s[%d] unmarshal recorded: %w", method, event, idx, err)
 	}
 
-	if !reflect.DeepEqual(actualValue, recordedValue) {
-		path, got, want := findJSONDiff(actualValue, recordedValue)
+	if diff := cmp.Diff(recordedValue, actualValue); diff != "" {
 		return fmt.Errorf(
-			"grpc %s %s[%d] mismatch at %s:\n got: %s\nwant: %s",
+			"grpc %s %s[%d] mismatch (-want +got):\n%s",
 			method,
 			event,
 			idx,
-			path,
-			formatJSONValue(got),
-			formatJSONValue(want),
+			diff,
 		)
 	}
 	return nil
-}
-
-func findJSONDiff(actual, recorded interface{}) (string, interface{}, interface{}) {
-	return findJSONDiffAt("$", actual, recorded)
-}
-
-func findJSONDiffAt(path string, actual, recorded interface{}) (string, interface{}, interface{}) {
-	if reflect.DeepEqual(actual, recorded) {
-		return "", nil, nil
-	}
-	if actual == nil || recorded == nil {
-		return path, actual, recorded
-	}
-
-	switch typed := actual.(type) {
-	case map[string]interface{}:
-		other, ok := recorded.(map[string]interface{})
-		if !ok {
-			return path, actual, recorded
-		}
-
-		keys := make([]string, 0, len(typed)+len(other))
-		seen := make(map[string]struct{}, len(typed)+len(other))
-		for key := range typed {
-			keys = append(keys, key)
-			seen[key] = struct{}{}
-		}
-		for key := range other {
-			if _, ok := seen[key]; !ok {
-				keys = append(keys, key)
-			}
-		}
-		sort.Strings(keys)
-
-		for _, key := range keys {
-			left, okLeft := typed[key]
-			right, okRight := other[key]
-			if !okLeft || !okRight {
-				return path + "." + key, left, right
-			}
-			if !reflect.DeepEqual(left, right) {
-				return findJSONDiffAt(path+"."+key, left, right)
-			}
-		}
-		return path, actual, recorded
-
-	case []interface{}:
-		other, ok := recorded.([]interface{})
-		if !ok {
-			return path, actual, recorded
-		}
-		if len(typed) != len(other) {
-			return path + ".length", len(typed), len(other)
-		}
-		for i := range typed {
-			if !reflect.DeepEqual(typed[i], other[i]) {
-				return findJSONDiffAt(fmt.Sprintf("%s[%d]", path, i), typed[i], other[i])
-			}
-		}
-		return path, actual, recorded
-
-	default:
-		return path, actual, recorded
-	}
-}
-
-func formatJSONValue(value interface{}) string {
-	if value == nil {
-		return "null"
-	}
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("%v", value)
-	}
-	return string(data)
 }
 
 func contains(values []string, v string) bool {
@@ -566,56 +487,7 @@ func TestRecordedSessions(t *testing.T) {
 
 func requireTextEqual(t *testing.T, label, expected, actual string) {
 	t.Helper()
-	if expected == actual {
-		return
+	if diff := cmp.Diff(expected, actual); diff != "" {
+		t.Fatalf("%s mismatch (-want +got):\n%s", label, diff)
 	}
-
-	line, col, expLine, actLine := firstLineDiff(expected, actual)
-	t.Fatalf(
-		"%s mismatch at line %d, col %d:\nexpected: %q\nactual:   %q",
-		label,
-		line,
-		col,
-		expLine,
-		actLine,
-	)
-}
-
-func firstLineDiff(expected, actual string) (int, int, string, string) {
-	expLines := strings.Split(expected, "\n")
-	actLines := strings.Split(actual, "\n")
-	maxLines := len(expLines)
-	if len(actLines) > maxLines {
-		maxLines = len(actLines)
-	}
-
-	for i := 0; i < maxLines; i++ {
-		var expLine string
-		var actLine string
-		if i < len(expLines) {
-			expLine = expLines[i]
-		}
-		if i < len(actLines) {
-			actLine = actLines[i]
-		}
-		if expLine != actLine {
-			col := firstDiffIndex(expLine, actLine) + 1
-			return i + 1, col, expLine, actLine
-		}
-	}
-
-	return 1, 1, "", ""
-}
-
-func firstDiffIndex(expected, actual string) int {
-	maxLen := len(expected)
-	if len(actual) < maxLen {
-		maxLen = len(actual)
-	}
-	for i := 0; i < maxLen; i++ {
-		if expected[i] != actual[i] {
-			return i
-		}
-	}
-	return maxLen
 }
