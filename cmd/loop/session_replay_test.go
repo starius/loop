@@ -14,8 +14,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
 	"google.golang.org/grpc"
@@ -50,6 +52,7 @@ func (emptyFS) Open(string) (fs.File, error) {
 type recordedSession struct {
 	args     []string
 	env      map[string]string
+	startAt  time.Time
 	stdin    string
 	stdout   string
 	stderr   string
@@ -86,6 +89,7 @@ func parseRecordedSession(blob []byte) (*recordedSession, error) {
 	replay := &recordedSession{
 		args:     append([]string(nil), data.Metadata.Args...),
 		env:      data.Metadata.Env,
+		startAt:  data.Metadata.StartTime,
 		runError: data.Metadata.RunError,
 	}
 
@@ -461,6 +465,13 @@ func TestRecordedSessions(t *testing.T) {
 
 			restoreEnv := applyEnv(replay.env)
 			defer restoreEnv()
+
+			var clockToUse clock.Clock = clock.NewTestClock(replay.startAt)
+			if replay.startAt.IsZero() {
+				clockToUse = clock.NewDefaultClock()
+			}
+			restoreClock := withClock(clockToUse)
+			defer restoreClock()
 
 			sessionRec = nil
 

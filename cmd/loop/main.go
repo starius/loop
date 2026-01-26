@@ -19,6 +19,7 @@ import (
 	"github.com/lightninglabs/loop/loopd"
 	"github.com/lightninglabs/loop/looprpc"
 	"github.com/lightninglabs/loop/swap"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
@@ -101,6 +102,8 @@ var (
 	forceDeterministicJSON bool
 
 	clientDialer clientConnDialer = &grpcDialer{}
+
+	cliClock clock.Clock = clock.NewDefaultClock()
 )
 
 const (
@@ -187,6 +190,7 @@ func main() {
 	}
 
 	if sessionRec != nil {
+		cliClock = clock.NewTestClock(sessionRec.started)
 		if err := sessionRec.Start(nil, nil, nil); err != nil {
 			fatal(err)
 		}
@@ -288,6 +292,12 @@ func withClientDialer(d clientConnDialer) func() {
 	prev := clientDialer
 	clientDialer = d
 	return func() { clientDialer = prev }
+}
+
+func withClock(c clock.Clock) func() {
+	prev := cliClock
+	cliClock = c
+	return func() { cliClock = prev }
 }
 
 // maybeNormalizeJSON rewrites JSON output to avoid the build-dependent spacing
