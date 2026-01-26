@@ -12,6 +12,7 @@ import (
 	"path"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -198,16 +199,16 @@ func (c *recordedClientConn) Invoke(ctx context.Context, method string, args int
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req, err := c.consume(method, "request")
+	req, reqIdx, err := c.consume(method, "request")
 	if err != nil {
 		return err
 	}
 
-	if err := compareMessage(args, req.Payload); err != nil {
+	if err := compareMessageWithContext(method, req.Event, reqIdx, args, req.Payload); err != nil {
 		return err
 	}
 
-	resp, err := c.consume(method, "response", "error")
+	resp, respIdx, err := c.consume(method, "response", "error")
 	if err != nil {
 		return err
 	}
@@ -222,19 +223,21 @@ func (c *recordedClientConn) Invoke(ctx context.Context, method string, args int
 	if replyMsg, ok := reply.(proto.Message); ok {
 		if resp.MessageType != "" {
 			if got := string(proto.MessageName(replyMsg)); got != resp.MessageType {
-				return fmt.Errorf("response type mismatch: got %s want %s", got, resp.MessageType)
+				return fmt.Errorf("grpc %s response[%d] type mismatch: got %s want %s", method, respIdx, got, resp.MessageType)
 			}
 		}
 		if len(resp.Payload) > 0 {
 			if err := protoUnmarshal.Unmarshal(resp.Payload, replyMsg); err != nil {
-				return err
+				return fmt.Errorf("grpc %s response[%d] unmarshal: %w", method, respIdx, err)
 			}
 		}
 		return nil
 	}
 
 	if len(resp.Payload) > 0 {
-		return json.Unmarshal(resp.Payload, reply)
+		if err := json.Unmarshal(resp.Payload, reply); err != nil {
+			return fmt.Errorf("grpc %s response[%d] unmarshal: %w", method, respIdx, err)
+		}
 	}
 
 	return nil
@@ -266,18 +269,18 @@ func (s *replayStream) SendMsg(m interface{}) error {
 	s.conn.mu.Lock()
 	defer s.conn.mu.Unlock()
 
-	evt, err := s.conn.consumeLocked(s.method, "send")
+	evt, evtIdx, err := s.conn.consumeLocked(s.method, "send")
 	if err != nil {
 		return err
 	}
-	return compareMessage(m, evt.Payload)
+	return compareMessageWithContext(s.method, evt.Event, evtIdx, m, evt.Payload)
 }
 
 func (s *replayStream) RecvMsg(m interface{}) error {
 	s.conn.mu.Lock()
 	defer s.conn.mu.Unlock()
 
-	evt, err := s.conn.consumeLocked(s.method, "recv", "error")
+	evt, evtIdx, err := s.conn.consumeLocked(s.method, "recv", "error")
 	if err != nil {
 		return err
 	}
@@ -292,43 +295,49 @@ func (s *replayStream) RecvMsg(m interface{}) error {
 	if msg, ok := m.(proto.Message); ok {
 		if evt.MessageType != "" {
 			if got := string(proto.MessageName(msg)); got != evt.MessageType {
-				return fmt.Errorf("stream response type mismatch: got %s want %s", got, evt.MessageType)
+				return fmt.Errorf("grpc %s recv[%d] type mismatch: got %s want %s", s.method, evtIdx, got, evt.MessageType)
 			}
 		}
-		return protoUnmarshal.Unmarshal(evt.Payload, msg)
+		if err := protoUnmarshal.Unmarshal(evt.Payload, msg); err != nil {
+			return fmt.Errorf("grpc %s recv[%d] unmarshal: %w", s.method, evtIdx, err)
+		}
+		return nil
 	}
 
 	if len(evt.Payload) > 0 {
-		return json.Unmarshal(evt.Payload, m)
+		if err := json.Unmarshal(evt.Payload, m); err != nil {
+			return fmt.Errorf("grpc %s recv[%d] unmarshal: %w", s.method, evtIdx, err)
+		}
 	}
 
 	return nil
 }
 
-func (c *recordedClientConn) consume(method, expected string, alternatives ...string) (*grpcPayload, error) {
+func (c *recordedClientConn) consume(method, expected string, alternatives ...string) (*grpcPayload, int, error) {
 	return c.consumeLocked(method, expected, alternatives...)
 }
 
-func (c *recordedClientConn) consumeLocked(method, expected string, alternatives ...string) (*grpcPayload, error) {
+func (c *recordedClientConn) consumeLocked(method, expected string, alternatives ...string) (*grpcPayload, int, error) {
 	if c.idx >= len(c.events) {
-		return nil, fmt.Errorf("no more grpc events, expected %s", expected)
+		return nil, c.idx, fmt.Errorf("grpc %s event[%d] missing, expected %s", method, c.idx, expected)
 	}
 
+	idx := c.idx
 	evt := c.events[c.idx]
 	c.idx++
 
 	if evt.Method != method {
-		return nil, fmt.Errorf("unexpected method %s, want %s", evt.Method, method)
+		return nil, idx, fmt.Errorf("grpc event[%d] unexpected method %s, want %s", idx, evt.Method, method)
 	}
 
 	if evt.Event == expected || contains(alternatives, evt.Event) {
-		return &evt, nil
+		return &evt, idx, nil
 	}
 
-	return nil, fmt.Errorf("unexpected event %s, expected %s", evt.Event, expected)
+	return nil, idx, fmt.Errorf("grpc %s event[%d] unexpected event %s, expected %s", method, idx, evt.Event, expected)
 }
 
-func compareMessage(msg interface{}, raw json.RawMessage) error {
+func compareMessageWithContext(method, event string, idx int, msg interface{}, raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return nil
 	}
@@ -339,31 +348,115 @@ func compareMessage(msg interface{}, raw json.RawMessage) error {
 		if err != nil {
 			return err
 		}
-		return compareJSON(actual, raw)
+		return compareJSONWithContext(method, event, idx, actual, raw)
 	default:
 		actual, err := json.Marshal(typed)
 		if err != nil {
 			return err
 		}
-		return compareJSON(actual, raw)
+		return compareJSONWithContext(method, event, idx, actual, raw)
 	}
 }
 
-func compareJSON(actual []byte, recorded json.RawMessage) error {
+func compareJSONWithContext(method, event string, idx int, actual []byte, recorded json.RawMessage) error {
 	var actualValue interface{}
 	var recordedValue interface{}
 
 	if err := json.Unmarshal(actual, &actualValue); err != nil {
-		return err
+		return fmt.Errorf("grpc %s %s[%d] unmarshal actual: %w", method, event, idx, err)
 	}
 	if err := json.Unmarshal(recorded, &recordedValue); err != nil {
-		return err
+		return fmt.Errorf("grpc %s %s[%d] unmarshal recorded: %w", method, event, idx, err)
 	}
 
 	if !reflect.DeepEqual(actualValue, recordedValue) {
-		return fmt.Errorf("request mismatch: got %s want %s", actual, recorded)
+		path, got, want := findJSONDiff(actualValue, recordedValue)
+		return fmt.Errorf(
+			"grpc %s %s[%d] mismatch at %s:\n got: %s\nwant: %s",
+			method,
+			event,
+			idx,
+			path,
+			formatJSONValue(got),
+			formatJSONValue(want),
+		)
 	}
 	return nil
+}
+
+func findJSONDiff(actual, recorded interface{}) (string, interface{}, interface{}) {
+	return findJSONDiffAt("$", actual, recorded)
+}
+
+func findJSONDiffAt(path string, actual, recorded interface{}) (string, interface{}, interface{}) {
+	if reflect.DeepEqual(actual, recorded) {
+		return "", nil, nil
+	}
+	if actual == nil || recorded == nil {
+		return path, actual, recorded
+	}
+
+	switch typed := actual.(type) {
+	case map[string]interface{}:
+		other, ok := recorded.(map[string]interface{})
+		if !ok {
+			return path, actual, recorded
+		}
+
+		keys := make([]string, 0, len(typed)+len(other))
+		seen := make(map[string]struct{}, len(typed)+len(other))
+		for key := range typed {
+			keys = append(keys, key)
+			seen[key] = struct{}{}
+		}
+		for key := range other {
+			if _, ok := seen[key]; !ok {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			left, okLeft := typed[key]
+			right, okRight := other[key]
+			if !okLeft || !okRight {
+				return path + "." + key, left, right
+			}
+			if !reflect.DeepEqual(left, right) {
+				return findJSONDiffAt(path+"."+key, left, right)
+			}
+		}
+		return path, actual, recorded
+
+	case []interface{}:
+		other, ok := recorded.([]interface{})
+		if !ok {
+			return path, actual, recorded
+		}
+		if len(typed) != len(other) {
+			return path + ".length", len(typed), len(other)
+		}
+		for i := range typed {
+			if !reflect.DeepEqual(typed[i], other[i]) {
+				return findJSONDiffAt(fmt.Sprintf("%s[%d]", path, i), typed[i], other[i])
+			}
+		}
+		return path, actual, recorded
+
+	default:
+		return path, actual, recorded
+	}
+}
+
+func formatJSONValue(value interface{}) string {
+	if value == nil {
+		return "null"
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(data)
 }
 
 func contains(values []string, v string) bool {
@@ -411,7 +504,7 @@ func TestRecordedSessions(t *testing.T) {
 			defer func() { forceDeterministicJSON = prevDeterministic }()
 
 			replay, err := loadRecordedSessionFS(sessionsFS, path)
-			require.NoError(t, err)
+			require.NoErrorf(t, err, "load session %s", path)
 
 			var stdoutBuf bytes.Buffer
 			var stderrBuf bytes.Buffer
@@ -419,23 +512,23 @@ func TestRecordedSessions(t *testing.T) {
 			stdoutUnhook, err := hookStdout(os.Stdout, nil, func(p []byte) {
 				stdoutBuf.Write(p)
 			})
-			require.NoError(t, err)
+			require.NoErrorf(t, err, "hook stdout for %s", path)
 			defer func() {
-				require.NoError(t, stdoutUnhook())
+				require.NoErrorf(t, stdoutUnhook(), "unhook stdout for %s", path)
 			}()
 
 			stderrUnhook, err := hookStderr(os.Stderr, nil, func(p []byte) {
 				stderrBuf.Write(p)
 			})
-			require.NoError(t, err)
+			require.NoErrorf(t, err, "hook stderr for %s", path)
 			defer func() {
-				require.NoError(t, stderrUnhook())
+				require.NoErrorf(t, stderrUnhook(), "unhook stderr for %s", path)
 			}()
 
 			stdinUnhook, err := hookStdin(os.Stdin, bytes.NewBufferString(replay.stdin), nil)
-			require.NoError(t, err)
+			require.NoErrorf(t, err, "hook stdin for %s", path)
 			defer func() {
-				require.NoError(t, stdinUnhook())
+				require.NoErrorf(t, stdinUnhook(), "unhook stdin for %s", path)
 			}()
 
 			prevTerm := term
@@ -459,14 +552,70 @@ func TestRecordedSessions(t *testing.T) {
 
 			if replay.runError != nil {
 				require.Error(t, err, "expected run error")
-				require.Equal(t, *replay.runError, err.Error(), "run error mismatch")
+				require.Equalf(t, *replay.runError, err.Error(), "run error mismatch for %s", path)
 			} else {
-				require.NoError(t, err)
+				require.NoErrorf(t, err, "command failed for %s", path)
 			}
 
-			require.Equal(t, replay.stdout, stdoutBuf.String(), "stdout mismatch")
+			requireTextEqual(t, "stdout", replay.stdout, stdoutBuf.String())
 
-			require.Equal(t, replay.stderr, stderrBuf.String(), "stderr mismatch")
+			requireTextEqual(t, "stderr", replay.stderr, stderrBuf.String())
 		})
 	}
+}
+
+func requireTextEqual(t *testing.T, label, expected, actual string) {
+	t.Helper()
+	if expected == actual {
+		return
+	}
+
+	line, col, expLine, actLine := firstLineDiff(expected, actual)
+	t.Fatalf(
+		"%s mismatch at line %d, col %d:\nexpected: %q\nactual:   %q",
+		label,
+		line,
+		col,
+		expLine,
+		actLine,
+	)
+}
+
+func firstLineDiff(expected, actual string) (int, int, string, string) {
+	expLines := strings.Split(expected, "\n")
+	actLines := strings.Split(actual, "\n")
+	maxLines := len(expLines)
+	if len(actLines) > maxLines {
+		maxLines = len(actLines)
+	}
+
+	for i := 0; i < maxLines; i++ {
+		var expLine string
+		var actLine string
+		if i < len(expLines) {
+			expLine = expLines[i]
+		}
+		if i < len(actLines) {
+			actLine = actLines[i]
+		}
+		if expLine != actLine {
+			col := firstDiffIndex(expLine, actLine) + 1
+			return i + 1, col, expLine, actLine
+		}
+	}
+
+	return 1, 1, "", ""
+}
+
+func firstDiffIndex(expected, actual string) int {
+	maxLen := len(expected)
+	if len(actual) < maxLen {
+		maxLen = len(actual)
+	}
+	for i := 0; i < maxLen; i++ {
+		if expected[i] != actual[i] {
+			return i
+		}
+	}
+	return maxLen
 }
