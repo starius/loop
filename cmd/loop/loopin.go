@@ -108,7 +108,7 @@ func loopIn(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}

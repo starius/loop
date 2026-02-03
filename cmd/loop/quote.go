@@ -72,7 +72,7 @@ func quoteIn(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -199,16 +199,16 @@ func quoteOut(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	fast := cmd.Bool("fast")
-	swapDeadline := time.Now()
+	swapDeadline := cliClock.Now()
 	if !fast {
-		swapDeadline = time.Now().Add(defaultSwapWaitTime)
+		swapDeadline = cliClock.Now().Add(defaultSwapWaitTime)
 	}
 
 	quoteReq := &looprpc.QuoteRequest{

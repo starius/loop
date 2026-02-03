@@ -16,7 +16,7 @@ var termsCommand = &cli.Command{
 }
 
 func terms(ctx context.Context, cmd *cli.Command) error {
-	client, cleanup, err := getClient(cmd)
+	client, cleanup, err := getClient(ctx, cmd)
 	if err != nil {
 		return err
 	}
