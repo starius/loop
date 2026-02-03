@@ -22,6 +22,9 @@ Base URL: `http://127.0.0.1:12345`
   - Returns loopd logs (text). Use a tail filter when inspecting.
 - `/loop-server-log`:
   - Returns loop server logs (text). Use a tail filter when inspecting.
+  - Tip: The response is JSON with a large `stdout` field; extract first, then tail:
+    - `curl -s http://127.0.0.1:12345/loop-server-log | jq -r '.stdout' > /tmp/loop-server-log.txt`
+    - `tail -n 50 /tmp/loop-server-log.txt`
 
 ## Useful regtest flow observations
 - Deposits may be unconfirmed for a few blocks; mine multiple blocks to move a deposit into `DEPOSITED`.
@@ -47,14 +50,14 @@ Base URL: `http://127.0.0.1:12345`
 | --- | --- |
 | `basic-swaps/` | `loop out` (success), `loop in` (success), `loop monitor` |
 | `getinfo/` | `loop getinfo` |
-| `instantout/` | `loop reservations list`, `loop instantout` (ALL + confirm), `loop listinstantouts` |
+| `instantout/` | `loop reservations list`, `loop instantout` (ALL + confirm), `loop instantout` (no confirmed reservations), `loop instantout` (cancel), `loop instantout` (invalid selection), `loop listinstantouts` |
 | `l402/` | `loop listauth`, `loop fetchl402` |
 | `liquidity/` | `loop getparams`, `loop setparams` (no flags, feepercent, conflict), `loop setrule` (missing threshold, no args, success), `loop suggestswaps` (error + success) |
 | `loopin/` | `loop in` (invalid amount), `loop in` (external + conf_target error), `loop in` (route_hints + private error) |
 | `loopout/` | `loop out` (forced success), `loop out` (invalid amount), `loop out` (addr + account error) |
 | `misc/` | `loop terms` |
 | `quote/` | `loop quote out` (success), `loop quote in` (help), `loop quote out` (help), `loop quote in` (deposit_outpoint success) |
-| `static/` | `loop static withdraw` (no selection error), `loop static withdraw` (invalid utxo), `loop static listwithdrawals`, `loop static listswaps` |
+| `static/` | `loop static withdraw` (no selection error), `loop static withdraw` (invalid utxo), `loop static withdraw` (all success), `loop static listwithdrawals`, `loop static listswaps` |
 | `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases) |
 | `swaps/` | `loop listswaps` (success + conflicting filters), `loop swapinfo` (success + invalid id), `loop abandonswap` (help + invalid id) |
 
@@ -62,4 +65,4 @@ Base URL: `http://127.0.0.1:12345`
 - `loop stop` (would terminate loopd; replay expects a live gRPC server).
 - Docs generators: `loop man`, `loop markdown` (handled in a separate docs pipeline).
 - Asset/tapd scenarios (explicitly out of scope for now).
-- Additional user-error paths not yet recorded: e.g. `loop static withdraw` success, `instantout` cancel/invalid selection.
+- Additional user-error paths not yet recorded: e.g. `loop static in` with duplicate outpoints, `loop out` with invalid account address type.
