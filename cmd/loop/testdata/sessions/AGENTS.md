@@ -50,16 +50,17 @@ Base URL: `http://127.0.0.1:12345`
 | --- | --- |
 | `basic-swaps/` | `loop out` (success), `loop in` (success), `loop monitor` |
 | `getinfo/` | `loop getinfo` |
-| `instantout/` | `loop reservations list`, `loop instantout` (ALL + confirm), `loop instantout` (no confirmed reservations), `loop instantout` (cancel), `loop instantout` (invalid selection), `loop listinstantouts` |
+| `instantout/` | `loop reservations list`, `loop instantout` (ALL + confirm), `loop instantout` (channel flag), `loop instantout` (no confirmed reservations), `loop instantout` (cancel), `loop instantout` (invalid selection), `loop listinstantouts` |
 | `l402/` | `loop listauth`, `loop fetchl402` |
-| `liquidity/` | `loop getparams`, `loop setparams` (no flags, feepercent, conflict), `loop setrule` (missing threshold, no args, success), `loop suggestswaps` (error + success) |
-| `loopin/` | `loop in` (invalid amount), `loop in` (external + conf_target error), `loop in` (route_hints + private error) |
-| `loopout/` | `loop out` (forced success), `loop out` (invalid amount), `loop out` (addr + account error), `loop out` (invalid account address type) |
+| `liquidity/` | `loop getparams`, `loop setparams` (no flags, feepercent, conflict, many flags/categories, destaddr, account, includeallpeers; includes error cases), `loop setrule` (missing threshold, no args, incoming/outgoing/type, clear), `loop suggestswaps` (error + success) |
+| `loopin/` | `loop in` (invalid amount), `loop in` (external + conf_target error), `loop in` (route_hints + private error), `loop in` (external cancel + verbose, last_hop/amt flag), `loop in` (external force) |
+| `loopout/` | `loop out` (forced success), `loop out` (invalid amount), `loop out` (addr + account error), `loop out` (invalid account address type), `loop out` (amt flag + channel + max routing fee + payment timeout), `loop out` (addr flag), `loop out` (positional addr), `loop out` (account + account_addr_type) |
 | `misc/` | `loop terms` |
-| `quote/` | `loop quote out` (success), `loop quote in` (help), `loop quote out` (help), `loop quote in` (deposit_outpoint success) |
-| `static/` | `loop static withdraw` (no selection error), `loop static withdraw` (invalid utxo), `loop static withdraw` (all success), `loop static listwithdrawals`, `loop static listswaps` |
-| `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases), `loop static in` (duplicate outpoints) |
-| `swaps/` | `loop listswaps` (success + conflicting filters), `loop swapinfo` (success + invalid id), `loop abandonswap` (help + invalid id) |
+| `quote/` | `loop quote out` (success + verbose), `loop quote in` (help), `loop quote out` (help), `loop quote in` (deposit_outpoint success), `loop quote in` (positional + last_hop) |
+| `static/` | `loop static withdraw` (no selection error), `loop static withdraw` (invalid utxo), `loop static withdraw` (all success), `loop static withdraw` (utxo + dest_addr success), `loop static listwithdrawals`, `loop static listswaps` |
+| `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases), `loop static in` (duplicate outpoints), `loop static in` (positional low amount error), `loop static in` (positional + last_hop + payment_timeout), `loop static in` (all cancel) |
+| `static-filters/` | `loop static listdeposits --filter ...` for each state (deposited/withdrawing/withdrawn/looping_in/looped_in/publish_expired_deposit/sweep_htlc_timeout/htlc_timeout_swept/wait_for_expiry_sweep/expired/failed) |
+| `swaps/` | `loop listswaps` (success + conflicting filters + loop_out_only filters + loop_in_only), `loop swapinfo` (success + invalid id + id flag errors), `loop abandonswap` (help + invalid id + success) |
 
 ## Missing / not covered yet
 - `loop stop` (would terminate loopd; replay expects a live gRPC server).
