@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -707,9 +708,28 @@ func cloneValue(value reflect.Value) reflect.Value {
 
 func requireTextEqual(t *testing.T, label, expected, actual string) {
 	t.Helper()
+	expected = normalizeRFC3339Timestamps(expected)
+	actual = normalizeRFC3339Timestamps(actual)
 	if diff := cmp.Diff(expected, actual); diff != "" {
 		t.Fatalf("%s mismatch (-want +got):\n%s", label, diff)
 	}
+}
+
+// rfc3339TimestampRegex matches RFC3339 timestamps embedded in CLI output.
+var rfc3339TimestampRegex = regexp.MustCompile(
+	`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`,
+)
+
+// normalizeRFC3339Timestamps rewrites RFC3339 timestamps to UTC to avoid
+// environment-dependent timezone output during session replay.
+func normalizeRFC3339Timestamps(text string) string {
+	return rfc3339TimestampRegex.ReplaceAllStringFunc(text, func(ts string) string {
+		parsed, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return ts
+		}
+		return parsed.UTC().Format(time.RFC3339Nano)
+	})
 }
 
 // TestCloneCommandForReplayResetsFlagState verifies cloned commands reset flag state.
