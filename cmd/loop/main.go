@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -101,12 +103,49 @@ var (
 		printManCommand, printMarkdownCommand,
 	}
 
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
+
+	sessionRec *sessionRecorder
+
+	// forceDeterministicJSON is enabled by tests to obtain stable JSON output.
+	forceDeterministicJSON bool
+
 	clientDialer clientConnDialer = &grpcDialer{}
 
 	cliClock clock.Clock = clock.NewDefaultClock()
-
-	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
 )
+
+func installSessionSignalHandler(cancel context.CancelFunc) (func(), error) {
+	if sessionRec == nil {
+		return func() {}, nil
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		interrupted := false
+		for sig := range sigCh {
+			sessionRec.LogSignal(sig)
+			if !interrupted {
+				interrupted = true
+				cancel()
+				continue
+			}
+
+			_ = sessionRec.Finalize(fmt.Errorf("signal: %s", sig))
+			os.Exit(130)
+		}
+	}()
+
+	return func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+		<-done
+	}, nil
+}
 
 const (
 
@@ -190,7 +229,8 @@ func printJSON(resp interface{}) {
 		fatal(err)
 	}
 	out.WriteString("\n")
-	if _, err := term.Write(out.Bytes()); err != nil {
+	printBytes := maybeNormalizeJSON(out.Bytes())
+	if _, err := term.Write(printBytes); err != nil {
 		fatal(err)
 	}
 }
@@ -202,18 +242,63 @@ func printRespJSON(resp proto.Message) {
 		return
 	}
 
-	term.Println(string(jsonBytes))
+	term.Println(string(maybeNormalizeJSON(jsonBytes)))
 }
 
 func fatal(err error) {
 	term.Errorf("[loop] %v\n", err)
+	if sessionRec != nil {
+		if finalizeErr := sessionRec.Finalize(err); finalizeErr != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", finalizeErr)
+		}
+	}
 	os.Exit(1)
 }
 
 func main() {
-	rootCmd := newRootCommand()
-	if err := rootCmd.Run(context.Background(), os.Args); err != nil {
+	var err error
+	sessionRec, err = newSessionRecorder(os.Args)
+	if err != nil {
 		fatal(err)
+	}
+
+	if sessionRec != nil {
+		cliClock = clock.NewTestClock(time.Unix(sessionClockStartUnix, 0))
+		if err := sessionRec.Start(nil, nil, nil); err != nil {
+			fatal(err)
+		}
+	}
+
+	term = newTerminal(os.Stdin, os.Stdout, os.Stderr)
+
+	rootCmd := newRootCommand()
+
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if sessionRec != nil {
+		ctx = sessionRec.InjectContext(ctx)
+	}
+
+	var signalStop func()
+	if sessionRec != nil {
+		var err error
+		signalStop, err = installSessionSignalHandler(cancel)
+		if err != nil {
+			fatal(err)
+		}
+		defer signalStop()
+	}
+
+	if err := rootCmd.Run(ctx, os.Args); err != nil {
+		fatal(err)
+	}
+
+	if sessionRec != nil {
+		if err := sessionRec.Finalize(nil); err != nil {
+			term.Errorf("[loop] unable to finalize session: %v\n", err)
+		}
 	}
 }
 
@@ -299,6 +384,33 @@ func withClock(c clock.Clock) func() {
 	prev := cliClock
 	cliClock = c
 	return func() { cliClock = prev }
+}
+
+// maybeNormalizeJSON rewrites JSON output to avoid the build-dependent spacing
+// introduced by google.golang.org/protobuf/internal/encoding/json (see
+// WriteName in protobuf-go-hex-display/internal/encoding/json/encode.go, which
+// uses internal/detrand.Bool). When recording or replaying sessions we ensure
+// stable output by re-encoding with the standard library.
+func maybeNormalizeJSON(raw []byte) []byte {
+	if sessionRec == nil && !forceDeterministicJSON {
+		return raw
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return raw
+	}
+
+	normalized, err := json.MarshalIndent(parsed, "", "    ")
+	if err != nil {
+		return raw
+	}
+
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		normalized = append(normalized, '\n')
+	}
+
+	return normalized
 }
 
 func getMaxRoutingFee(amt btcutil.Amount) btcutil.Amount {
@@ -522,6 +634,15 @@ func getClientConn(_ context.Context, address, tlsCertPath, macaroonPath string)
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(maxMsgRecvSize),
 		macOption,
+	}
+
+	if sessionRec != nil {
+		if unary := sessionRec.UnaryInterceptor(); unary != nil {
+			opts = append(opts, grpc.WithChainUnaryInterceptor(unary))
+		}
+		if stream := sessionRec.StreamInterceptor(); stream != nil {
+			opts = append(opts, grpc.WithChainStreamInterceptor(stream))
+		}
 	}
 
 	// TLS cannot be disabled, we'll always have a cert file to read.
