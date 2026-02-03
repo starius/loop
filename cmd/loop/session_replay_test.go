@@ -708,8 +708,8 @@ func cloneValue(value reflect.Value) reflect.Value {
 
 func requireTextEqual(t *testing.T, label, expected, actual string) {
 	t.Helper()
-	expected = normalizeRFC3339Timestamps(expected)
-	actual = normalizeRFC3339Timestamps(actual)
+	expected = normalizeTimestamps(expected)
+	actual = normalizeTimestamps(actual)
 	if diff := cmp.Diff(expected, actual); diff != "" {
 		t.Fatalf("%s mismatch (-want +got):\n%s", label, diff)
 	}
@@ -720,19 +720,39 @@ var rfc3339TimestampRegex = regexp.MustCompile(
 	`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`,
 )
 
-// normalizeRFC3339Timestamps rewrites RFC3339 timestamps to UTC to avoid
+// timeStringTimestampRegex matches time.String-style timestamps embedded in CLI
+// output.
+var timeStringTimestampRegex = regexp.MustCompile(
+	`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [A-Z]{2,5}`,
+)
+
+// normalizeTimestamps rewrites embedded timestamps to UTC to avoid
 // environment-dependent timezone output during session replay.
-func normalizeRFC3339Timestamps(text string) string {
-	return rfc3339TimestampRegex.ReplaceAllStringFunc(text, func(ts string) string {
+func normalizeTimestamps(text string) string {
+	rfc3339Replacer := func(ts string) string {
 		parsed, err := time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
 			return ts
 		}
 		return parsed.UTC().Format(time.RFC3339Nano)
-	})
+	}
+	text = rfc3339TimestampRegex.ReplaceAllStringFunc(text, rfc3339Replacer)
+
+	timeReplacer := func(ts string) string {
+		parsed, err := time.Parse("2006-01-02 15:04:05 -0700 MST", ts)
+		if err != nil {
+			return ts
+		}
+		return parsed.UTC().Format("2006-01-02 15:04:05 -0700 MST")
+	}
+
+	text = timeStringTimestampRegex.ReplaceAllStringFunc(text, timeReplacer)
+
+	return text
 }
 
-// TestCloneCommandForReplayResetsFlagState verifies cloned commands reset flag state.
+// TestCloneCommandForReplayResetsFlagState verifies cloned commands reset flag
+// state.
 func TestCloneCommandForReplayResetsFlagState(t *testing.T) {
 	originalFlag := &cli.StringFlag{
 		Name:    "alpha",
