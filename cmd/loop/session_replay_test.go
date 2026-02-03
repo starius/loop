@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -462,7 +463,7 @@ func TestRecordedSessions(t *testing.T) {
 
 			sessionRec = nil
 
-			cmd := newRootCommand()
+			cmd := newRootCommandForReplay()
 
 			err = cmd.Run(context.Background(), replay.args)
 			if err != nil {
@@ -484,6 +485,223 @@ func TestRecordedSessions(t *testing.T) {
 
 			requireTextEqual(t, "stderr", replay.stderr, stderrBuf.String())
 		})
+	}
+}
+
+// newRootCommandForReplay returns a root command clone with fresh flag state.
+func newRootCommandForReplay() *cli.Command {
+	return cloneCommandForReplay(newRootCommand())
+}
+
+// cloneCommandForReplay deep-clones a command tree for deterministic replays.
+func cloneCommandForReplay(cmd *cli.Command) *cli.Command {
+	if cmd == nil {
+		return nil
+	}
+
+	cloned := cloneCommandStruct(cmd)
+	cloned.Flags, cloned.MutuallyExclusiveFlags = cloneFlagsWithGroups(
+		cmd.Flags, cmd.MutuallyExclusiveFlags,
+	)
+	cloned.Arguments = cloneArguments(cmd.Arguments)
+	cloned.Commands = cloneCommands(cmd.Commands)
+
+	return cloned
+}
+
+// cloneCommandStruct copies exported fields of a command into a new instance.
+func cloneCommandStruct(cmd *cli.Command) *cli.Command {
+	if cmd == nil {
+		return nil
+	}
+
+	src := reflect.ValueOf(cmd).Elem()
+	dst := reflect.New(src.Type()).Elem()
+	copyExportedFields(dst, src)
+	return dst.Addr().Interface().(*cli.Command)
+}
+
+// cloneCommands clones a list of subcommands for replay.
+func cloneCommands(cmds []*cli.Command) []*cli.Command {
+	if len(cmds) == 0 {
+		return nil
+	}
+
+	cloned := make([]*cli.Command, len(cmds))
+	for i, cmd := range cmds {
+		cloned[i] = cloneCommandForReplay(cmd)
+	}
+	return cloned
+}
+
+// cloneFlagsWithGroups clones flags and rebinds mutually exclusive groups.
+func cloneFlagsWithGroups(flags []cli.Flag, groups []cli.MutuallyExclusiveFlags) ([]cli.Flag, []cli.MutuallyExclusiveFlags) {
+	clonedFlags, clonedMap := cloneFlags(flags)
+	clonedGroups := cloneMutuallyExclusiveFlags(groups, clonedMap)
+	return clonedFlags, clonedGroups
+}
+
+// cloneFlags creates fresh flag instances and returns a map of originals to clones.
+func cloneFlags(flags []cli.Flag) ([]cli.Flag, map[cli.Flag]cli.Flag) {
+	if len(flags) == 0 {
+		return nil, map[cli.Flag]cli.Flag{}
+	}
+
+	cloned := make([]cli.Flag, len(flags))
+	clonedMap := make(map[cli.Flag]cli.Flag, len(flags))
+	for i, flag := range flags {
+		if flag == nil {
+			continue
+		}
+		copy := cloneFlag(flag)
+		cloned[i] = copy
+		clonedMap[flag] = copy
+	}
+	return cloned, clonedMap
+}
+
+// cloneMutuallyExclusiveFlags clones flag groups using the provided flag map.
+func cloneMutuallyExclusiveFlags(groups []cli.MutuallyExclusiveFlags, clonedMap map[cli.Flag]cli.Flag) []cli.MutuallyExclusiveFlags {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	clonedGroups := make([]cli.MutuallyExclusiveFlags, len(groups))
+	for i, group := range groups {
+		clonedGroup := cli.MutuallyExclusiveFlags{
+			Required: group.Required,
+			Category: group.Category,
+		}
+		if len(group.Flags) > 0 {
+			clonedGroup.Flags = make([][]cli.Flag, len(group.Flags))
+			for j, option := range group.Flags {
+				if len(option) == 0 {
+					continue
+				}
+				clonedOption := make([]cli.Flag, len(option))
+				for k, flag := range option {
+					if flag == nil {
+						continue
+					}
+					clone, ok := clonedMap[flag]
+					if !ok {
+						clone = cloneFlag(flag)
+						clonedMap[flag] = clone
+					}
+					clonedOption[k] = clone
+				}
+				clonedGroup.Flags[j] = clonedOption
+			}
+		}
+		clonedGroups[i] = clonedGroup
+	}
+
+	return clonedGroups
+}
+
+// cloneFlag clones a single flag by copying its exported fields.
+func cloneFlag(flag cli.Flag) cli.Flag {
+	if flag == nil {
+		return nil
+	}
+
+	cloned, ok := cloneStructWithExportedFields(flag)
+	if !ok {
+		return flag
+	}
+	clonedFlag, ok := cloned.(cli.Flag)
+	if !ok {
+		return flag
+	}
+	return clonedFlag
+}
+
+// cloneArguments clones positional argument definitions.
+func cloneArguments(args []cli.Argument) []cli.Argument {
+	if len(args) == 0 {
+		return nil
+	}
+
+	cloned := make([]cli.Argument, len(args))
+	for i, arg := range args {
+		cloned[i] = cloneArgument(arg)
+	}
+	return cloned
+}
+
+// cloneArgument clones a single argument by copying its exported fields.
+func cloneArgument(arg cli.Argument) cli.Argument {
+	if arg == nil {
+		return nil
+	}
+
+	cloned, ok := cloneStructWithExportedFields(arg)
+	if !ok {
+		return arg
+	}
+	clonedArg, ok := cloned.(cli.Argument)
+	if !ok {
+		return arg
+	}
+	return clonedArg
+}
+
+// cloneStructWithExportedFields clones a pointer-to-struct by exported fields.
+func cloneStructWithExportedFields(src interface{}) (interface{}, bool) {
+	if src == nil {
+		return nil, false
+	}
+
+	value := reflect.ValueOf(src)
+	if value.Kind() != reflect.Ptr || value.Elem().Kind() != reflect.Struct {
+		return nil, false
+	}
+
+	cloned := reflect.New(value.Elem().Type())
+	copyExportedFields(cloned.Elem(), value.Elem())
+	return cloned.Interface(), true
+}
+
+// copyExportedFields copies exported fields from src into dst.
+func copyExportedFields(dst, src reflect.Value) {
+	for i := 0; i < src.NumField(); i++ {
+		field := src.Type().Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		dstField := dst.Field(i)
+		if !dstField.CanSet() {
+			continue
+		}
+		dstField.Set(cloneValue(src.Field(i)))
+	}
+}
+
+// cloneValue shallow-clones slices and maps while preserving other values.
+func cloneValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+
+	switch value.Kind() {
+	case reflect.Slice:
+		if value.IsNil() {
+			return value
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		reflect.Copy(cloned, value)
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return value
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		for _, key := range value.MapKeys() {
+			cloned.SetMapIndex(key, value.MapIndex(key))
+		}
+		return cloned
+	default:
+		return value
 	}
 }
 

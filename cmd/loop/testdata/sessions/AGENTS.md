@@ -39,7 +39,5 @@ Base URL: `http://127.0.0.1:12345`
 
 
 ## Replay stability notes
-- CLI flag instances are global; in session replay they can retain `IsSet` state across runs.
-- Avoid recording sessions that set flags which would change later runs (e.g. `--route_hints`, `--private`, `--addr`, `--account`, `--utxo`) unless they are ordered after all other sessions that use those flags.
-- Prefer error scenarios that do not set flags (invalid amount, conflicting IDs, missing args/help paths) to keep replay deterministic.
-- If you must keep multiple sessions for the same command with different flags, order filenames so the least "sticky" runs first and the most flag-heavy runs last.
+- Session replay now clones the CLI command tree per run, so flag state (`IsSet`) does not leak between sessions.
+- Historical warning: earlier replays could have sticky flags across runs; if you see odd ordering-dependent failures, re-check that the replay uses the cloned command path.
