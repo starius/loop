@@ -9,6 +9,8 @@
 
 ## Control panel HTTP server (regtest helpers)
 Base URL: `http://127.0.0.1:12345`
+- Implementation: [httpcmd](https://github.com/starius/httpcmd/)
+- Config: [control panel config](https://gist.github.com/starius/6604ffe27f51d55f4cf715b4202637dd)
 - `/mine`:
   - Mines a block. Returns JSON with `exit_code`, `stdout`, `stderr`, `duration`, `timed_out`.
 - `/deposit`:
