@@ -711,3 +711,99 @@ func requireTextEqual(t *testing.T, label, expected, actual string) {
 		t.Fatalf("%s mismatch (-want +got):\n%s", label, diff)
 	}
 }
+
+// TestCloneCommandForReplayResetsFlagState verifies cloned commands reset flag state.
+func TestCloneCommandForReplayResetsFlagState(t *testing.T) {
+	originalFlag := &cli.StringFlag{
+		Name:    "alpha",
+		Usage:   "alpha usage",
+		Aliases: []string{"a"},
+	}
+	require.NoError(t, originalFlag.Set("alpha", "value"))
+	require.True(t, originalFlag.IsSet())
+
+	sharedFlag := &cli.BoolFlag{Name: "shared"}
+	require.NoError(t, sharedFlag.Set("shared", "true"))
+	require.True(t, sharedFlag.IsSet())
+
+	originalArg := &cli.StringArg{
+		Name:      "arg",
+		UsageText: "arg usage",
+		Value:     "default",
+	}
+	_, err := originalArg.Parse([]string{"parsed"})
+	require.NoError(t, err)
+	require.Equal(t, "parsed", originalArg.Get())
+
+	root := &cli.Command{
+		Name:  "root",
+		Flags: []cli.Flag{originalFlag, sharedFlag},
+		MutuallyExclusiveFlags: []cli.MutuallyExclusiveFlags{
+			{
+				Flags:    [][]cli.Flag{{originalFlag}, {sharedFlag}},
+				Required: true,
+				Category: "cat",
+			},
+		},
+		Arguments: []cli.Argument{originalArg},
+		Metadata: map[string]interface{}{
+			"key": "value",
+		},
+		Commands: []*cli.Command{
+			{
+				Name:  "sub",
+				Flags: []cli.Flag{sharedFlag},
+			},
+		},
+	}
+
+	cloned := cloneCommandForReplay(root)
+
+	require.NotSame(t, root, cloned)
+	require.Len(t, cloned.Flags, len(root.Flags))
+	require.Len(t, cloned.Commands, len(root.Commands))
+	require.Len(t, cloned.MutuallyExclusiveFlags, len(root.MutuallyExclusiveFlags))
+	require.Len(t, cloned.Arguments, len(root.Arguments))
+
+	clonedAlpha := findFlagByName(t, cloned.Flags, "alpha").(*cli.StringFlag)
+	require.NotSame(t, originalFlag, clonedAlpha)
+	require.False(t, clonedAlpha.IsSet())
+	require.Equal(t, originalFlag.Name, clonedAlpha.Name)
+	require.Equal(t, originalFlag.Usage, clonedAlpha.Usage)
+	require.Equal(t, originalFlag.Aliases, clonedAlpha.Aliases)
+
+	clonedAlpha.Aliases[0] = "b"
+	require.Equal(t, []string{"a"}, originalFlag.Aliases)
+
+	clonedShared := findFlagByName(t, cloned.Flags, "shared").(*cli.BoolFlag)
+	require.NotSame(t, sharedFlag, clonedShared)
+	require.False(t, clonedShared.IsSet())
+
+	group := cloned.MutuallyExclusiveFlags[0]
+	require.Same(t, clonedAlpha, group.Flags[0][0].(*cli.StringFlag))
+	require.Same(t, clonedShared, group.Flags[1][0].(*cli.BoolFlag))
+
+	clonedArg := cloned.Arguments[0].(*cli.StringArg)
+	require.NotSame(t, originalArg, clonedArg)
+	require.Equal(t, "default", clonedArg.Get())
+
+	cloned.Metadata["key"] = "updated"
+	require.Equal(t, "value", root.Metadata["key"])
+}
+
+// findFlagByName locates a flag by name or alias.
+func findFlagByName(t *testing.T, flags []cli.Flag, name string) cli.Flag {
+	t.Helper()
+	for _, flag := range flags {
+		if flag == nil {
+			continue
+		}
+		for _, candidate := range flag.Names() {
+			if candidate == name {
+				return flag
+			}
+		}
+	}
+	t.Fatalf("flag %q not found", name)
+	return nil
+}

@@ -41,3 +41,25 @@ Base URL: `http://127.0.0.1:12345`
 ## Replay stability notes
 - Session replay now clones the CLI command tree per run, so flag state (`IsSet`) does not leak between sessions.
 - Historical warning: earlier replays could have sticky flags across runs; if you see odd ordering-dependent failures, re-check that the replay uses the cloned command path.
+
+## Session coverage map
+| Subdir | Commands / scenarios |
+| --- | --- |
+| `basic-swaps/` | `loop out` (success), `loop in` (success), `loop monitor` |
+| `getinfo/` | `loop getinfo` |
+| `instantout/` | `loop reservations list`, `loop instantout` (ALL + confirm), `loop listinstantouts` |
+| `l402/` | `loop listauth`, `loop fetchl402` |
+| `liquidity/` | `loop getparams`, `loop setparams` (no flags, feepercent, conflict), `loop setrule` (missing threshold, no args, success), `loop suggestswaps` (error + success) |
+| `loopin/` | `loop in` (invalid amount) |
+| `loopout/` | `loop out` (forced success), `loop out` (invalid amount) |
+| `misc/` | `loop terms` |
+| `quote/` | `loop quote out` (success), `loop quote in` (help), `loop quote out` (help), `loop quote in` (deposit_outpoint success) |
+| `static/` | `loop static withdraw` (no selection error), `loop static listwithdrawals`, `loop static listswaps` |
+| `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases) |
+| `swaps/` | `loop listswaps` (success + conflicting filters), `loop swapinfo` (success + invalid id), `loop abandonswap` (help + invalid id) |
+
+## Missing / not covered yet
+- `loop stop` (would terminate loopd; replay expects a live gRPC server).
+- Docs generators: `loop man`, `loop markdown` (handled in a separate docs pipeline).
+- Asset/tapd scenarios (explicitly out of scope for now).
+- Additional user-error paths not yet recorded: e.g. `loop in` with `--external` + `--conf_target`, `loop in` with `--route_hints` + `--private`, `loop out` with `--addr` + `--account`, `loop static withdraw` success/invalid utxo, `instantout` cancel/invalid selection.
