@@ -54,15 +54,14 @@ Base URL: `http://127.0.0.1:12345`
 | `l402/` | `loop listauth`, `loop fetchl402` |
 | `liquidity/` | `loop getparams`, `loop setparams` (no flags, feepercent, conflict), `loop setrule` (missing threshold, no args, success), `loop suggestswaps` (error + success) |
 | `loopin/` | `loop in` (invalid amount), `loop in` (external + conf_target error), `loop in` (route_hints + private error) |
-| `loopout/` | `loop out` (forced success), `loop out` (invalid amount), `loop out` (addr + account error) |
+| `loopout/` | `loop out` (forced success), `loop out` (invalid amount), `loop out` (addr + account error), `loop out` (invalid account address type) |
 | `misc/` | `loop terms` |
 | `quote/` | `loop quote out` (success), `loop quote in` (help), `loop quote out` (help), `loop quote in` (deposit_outpoint success) |
 | `static/` | `loop static withdraw` (no selection error), `loop static withdraw` (invalid utxo), `loop static withdraw` (all success), `loop static listwithdrawals`, `loop static listswaps` |
-| `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases) |
+| `static-loop-in/` | `loop static new`, `loop static` (help), `loop static listunspent` (incl alias), `loop static listdeposits`, `loop static summary`, `loop static in` (multiple args/flags cases), `loop static in` (duplicate outpoints) |
 | `swaps/` | `loop listswaps` (success + conflicting filters), `loop swapinfo` (success + invalid id), `loop abandonswap` (help + invalid id) |
 
 ## Missing / not covered yet
 - `loop stop` (would terminate loopd; replay expects a live gRPC server).
 - Docs generators: `loop man`, `loop markdown` (handled in a separate docs pipeline).
 - Asset/tapd scenarios (explicitly out of scope for now).
-- Additional user-error paths not yet recorded: e.g. `loop static in` with duplicate outpoints, `loop out` with invalid account address type.
