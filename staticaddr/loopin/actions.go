@@ -1008,6 +1008,11 @@ func (f *FSM) MonitorInvoiceAndHtlcTxAction(ctx context.Context,
 			deposit.OnSweepingHtlcTimeout,
 			deposit.SweepHtlcTimeout,
 		)
+		refreshErr := f.refreshSelectedDeposits(ctx)
+		if refreshErr != nil {
+			return fmt.Errorf("unable to reload deposits after htlc "+
+				"timeout transition: %w", refreshErr)
+		}
 		if transitionErr != nil {
 			// WaitForState can report cancellation after the deposit FSMs
 			// already reached the target state. Do not turn that shutdown
@@ -1131,7 +1136,10 @@ func (f *FSM) MonitorInvoiceAndHtlcTxAction(ctx context.Context,
 		)
 	}
 
-	htlcConfirmed := false
+	// A recovered or retried monitor may have missed the original
+	// confirmation notification. SweepHtlcTimeout is persisted only after an
+	// HTLC confirmation, so it is authoritative recovery evidence.
+	htlcConfirmed := depositsLockedForHtlcTimeout
 	for {
 		select {
 		case <-htlcConfChan:
@@ -1194,8 +1202,10 @@ func (f *FSM) MonitorInvoiceAndHtlcTxAction(ctx context.Context,
 			deadlineChan = nil
 
 			// If the server didn't pay the invoice on time, we cancel
-			// it and keep monitoring the htlc tx. Confirmed HTLC
-			// deposits remain locked for timeout sweeping.
+			// it and keep monitoring the htlc tx. The deposits must
+			// remain locked because the server can publish the signed
+			// HTLC until its timeout, even if it wasn't confirmed when
+			// the payment deadline elapsed.
 			event, canceled := cancelInvoice(
 				"timeout waiting for invoice to be paid",
 			)
@@ -1211,12 +1221,6 @@ func (f *FSM) MonitorInvoiceAndHtlcTxAction(ctx context.Context,
 				}
 
 				continue
-			}
-
-			err = f.unlockDeposits(ctx)
-			if err != nil {
-				return retryMonitor(fmt.Errorf("unable to unlock deposits "+
-					"after payment deadline: %w", err))
 			}
 
 		case riskUpdate, ok := <-riskUpdateChan:

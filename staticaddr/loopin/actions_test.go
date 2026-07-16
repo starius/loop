@@ -1587,10 +1587,12 @@ func TestMonitorInvoiceAndHtlcTxPersistsRiskRejected(t *testing.T) {
 	}
 }
 
-// TestMonitorInvoiceAndHtlcTxRecoversAcceptedRiskDecision verifies that a
-// persisted risk acceptance restarts the payment deadline with elapsed time
-// preserved after restart.
-func TestMonitorInvoiceAndHtlcTxRecoversAcceptedRiskDecision(t *testing.T) {
+// TestMonitorInvoiceAndHtlcTxKeepsDepositsLockedAfterPaymentDeadline verifies
+// that a persisted risk acceptance restarts the elapsed payment deadline but
+// does not unlock deposits while the server can still publish the signed HTLC.
+func TestMonitorInvoiceAndHtlcTxKeepsDepositsLockedAfterPaymentDeadline(
+	t *testing.T) {
+
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 
@@ -1671,11 +1673,9 @@ func TestMonitorInvoiceAndHtlcTxRecoversAcceptedRiskDecision(t *testing.T) {
 
 	select {
 	case transition := <-depositMgr.transitionChan:
-		require.Equal(t, fsm.OnError, transition.event)
-		require.Equal(t, deposit.Deposited, transition.state)
+		t.Fatalf("deposits unlocked after payment deadline: %v", transition)
 
-	case <-ctx.Done():
-		t.Fatalf("deposits were not unlocked: %v", ctx.Err())
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	cancel()
