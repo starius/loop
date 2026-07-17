@@ -2,6 +2,7 @@ package address
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/lightninglabs/loop/loopdb"
@@ -23,7 +24,7 @@ func NewSqlStore(db *loopdb.BaseDB) *SqlStore {
 	}
 }
 
-// CreateStaticAddress creates a static address record in the database.
+// CreateStaticAddress creates a static address record.
 func (s *SqlStore) CreateStaticAddress(ctx context.Context,
 	addrParams *Parameters) error {
 
@@ -36,6 +37,7 @@ func (s *SqlStore) CreateStaticAddress(ctx context.Context,
 		Pkscript:         addrParams.PkScript,
 		ProtocolVersion:  int32(addrParams.ProtocolVersion),
 		InitiationHeight: addrParams.InitiationHeight,
+		Label:            addrParams.Label,
 	}
 
 	return s.baseDB.Queries.CreateStaticAddress(ctx, createArgs)
@@ -82,6 +84,30 @@ func (s *SqlStore) GetLegacyParameters(ctx context.Context) (*Parameters,
 	return s.toAddressParameters(staticAddress)
 }
 
+// UpdateStaticAddressLabel updates the local label for a static address by its
+// pkScript, keeping relabeling a metadata-only database change that cannot
+// create a new address record.
+func (s *SqlStore) UpdateStaticAddressLabel(ctx context.Context,
+	pkScript []byte, label string) error {
+
+	updateArgs := sqlc.UpdateStaticAddressLabelParams{
+		Pkscript: pkScript,
+		Label:    label,
+	}
+
+	rowsAffected, err := s.baseDB.Queries.UpdateStaticAddressLabel(
+		ctx, updateArgs,
+	)
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("static address not found")
+	}
+
+	return nil
+}
+
 // toAddressParameters transforms a database representation of a static address
 // to an AddressParameters struct.
 func (s *SqlStore) toAddressParameters(row sqlc.StaticAddress) (
@@ -111,5 +137,6 @@ func (s *SqlStore) toAddressParameters(row sqlc.StaticAddress) (
 			row.ProtocolVersion,
 		),
 		InitiationHeight: row.InitiationHeight,
+		Label:            row.Label,
 	}, nil
 }
