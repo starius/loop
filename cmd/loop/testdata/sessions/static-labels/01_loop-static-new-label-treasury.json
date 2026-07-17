@@ -40,10 +40,10 @@
         "method": "/looprpc.SwapClient/NewStaticAddress",
         "event": "request",
         "message_type": "looprpc.NewStaticAddressRequest",
-		"payload": {
-		  "client_key": "",
-		  "send_coins_request": null,
-		  "label": "treasury"
+        "payload": {
+          "client_key": "",
+          "send_coins_request": null,
+          "label": "treasury"
         }
       }
     },
@@ -55,10 +55,10 @@
         "event": "response",
         "message_type": "looprpc.NewStaticAddressResponse",
         "payload": {
-		  "address": "bcrt1prm4cgnjnmmd5v50g9x9tg844unk0n3tn3dxq9y24y2yfhezm4l5qecmcr6",
-		  "expiry": 14400,
-		  "send_coins_response": null,
-		  "label": "treasury"
+          "address": "bcrt1prm4cgnjnmmd5v50g9x9tg844unk0n3tn3dxq9y24y2yfhezm4l5qecmcr6",
+          "expiry": 14400,
+          "send_coins_response": null,
+          "label": "treasury"
         }
       }
     },
@@ -68,10 +68,10 @@
       "data": {
         "lines": [
           "{\n",
-		  "    \"address\": \"bcrt1prm4cgnjnmmd5v50g9x9tg844unk0n3tn3dxq9y24y2yfhezm4l5qecmcr6\",\n",
-		  "    \"expiry\": 14400,\n",
-		  "    \"send_coins_response\": null,\n",
-		  "    \"label\": \"treasury\"\n",
+          "    \"address\": \"bcrt1prm4cgnjnmmd5v50g9x9tg844unk0n3tn3dxq9y24y2yfhezm4l5qecmcr6\",\n",
+          "    \"expiry\": 14400,\n",
+          "    \"label\": \"treasury\",\n",
+          "    \"send_coins_response\": null\n",
           "}\n"
         ]
       }

@@ -1399,13 +1399,18 @@ func newStaticAddressLabelTestServer(t *testing.T, seedLabel string) (
 	_, err = addrMgr.EnsureStaticAddressSeed(ctx)
 	require.NoError(t, err)
 
+	addr, err := addrMgr.GetTaprootAddress(
+		clientPubkey, serverPubkey, 10,
+	)
+	require.NoError(t, err)
+
 	return &swapClientServer{
 		lnd:                  &mockLnd.LndServices,
 		staticAddressManager: addrMgr,
 		depositManager: &listUnspentDepositManager{
 			byOutpoint: make(map[string]*deposit.Deposit),
 		},
-	}, addrStore, staticAddress.String()
+	}, addrStore, addr.String()
 }
 
 // TestStaticAddressLabels covers creation, update, clearing and validation at

@@ -312,14 +312,15 @@ func TestStaticAddressForDeposit(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	addr, expiry, err := server.staticAddressForDeposit(
+	addr, expiry, label, err := server.staticAddressForDeposit(
 		ctx, expectedAddr.String(),
 	)
 	require.NoError(t, err)
 	require.Equal(t, expectedAddr.String(), addr)
 	require.Equal(t, addresses[0].Expiry, expiry)
+	require.Empty(t, label)
 
-	_, _, err = server.staticAddressForDeposit(
+	_, _, _, err = server.staticAddressForDeposit(
 		ctx, "bcrt1punknownstaticaddress",
 	)
 	require.ErrorContains(t, err, "not a known static address")
