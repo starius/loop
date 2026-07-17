@@ -168,6 +168,12 @@ service SwapClient {
     rpc NewStaticAddress (NewStaticAddressRequest)
         returns (NewStaticAddressResponse);
 
+    /* loop: `static updatelabel`
+    UpdateStaticAddressLabel updates the local label for a static address.
+    */
+    rpc UpdateStaticAddressLabel (UpdateStaticAddressLabelRequest)
+        returns (UpdateStaticAddressLabelResponse);
+
     /* loop: `static listunspentdeposits`
     ListUnspentDeposits returns a list of utxos deposited at a static address.
     */
@@ -1775,6 +1781,11 @@ message NewStaticAddressRequest {
     loopd.
     */
     lnrpc.SendCoinsRequest send_coins_request = 2;
+
+    /*
+    An optional label for this static address. Empty string means no label.
+    */
+    string label = 3;
 }
 
 message NewStaticAddressResponse {
@@ -1792,6 +1803,35 @@ message NewStaticAddressResponse {
     The response from lnd's SendCoins API, if a deposit was initiated.
     */
     lnrpc.SendCoinsResponse send_coins_response = 3;
+
+    /*
+    The label for this static address. Empty string means no label.
+    */
+    string label = 4;
+}
+
+message UpdateStaticAddressLabelRequest {
+    /*
+    The static address whose label should be updated.
+    */
+    string static_address = 1;
+
+    /*
+    The updated label for the static address. Empty string means no label.
+    */
+    string label = 2;
+}
+
+message UpdateStaticAddressLabelResponse {
+    /*
+    The static address whose label was updated.
+    */
+    string static_address = 1;
+
+    /*
+    The updated label for the static address. Empty string means no label.
+    */
+    string label = 2;
 }
 
 message ListUnspentDepositsRequest {
@@ -1834,6 +1874,12 @@ message Utxo {
     The number of confirmations for the Utxo.
     */
     int64 confirmations = 4;
+
+    /*
+    The label for the static address that owns this Utxo. Empty string means no
+    label.
+    */
+    string label = 5;
 }
 
 message WithdrawDepositsRequest {
@@ -1971,6 +2017,11 @@ message StaticAddressSummaryResponse {
     The total value of all deposits that have been used for channel openings.
     */
     int64 value_channels_opened = 10;
+
+    /*
+    The label for this static address. Empty string means no label.
+    */
+    string label = 11;
 }
 
 enum DepositState {

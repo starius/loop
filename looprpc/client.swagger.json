@@ -1001,6 +1001,39 @@
         ]
       }
     },
+    "/v1/staticaddr/label": {
+      "post": {
+        "summary": "loop: `static updatelabel`\nUpdateStaticAddressLabel updates the local label for a static address.",
+        "operationId": "SwapClient_UpdateStaticAddressLabel",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/looprpcUpdateStaticAddressLabelResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/looprpcUpdateStaticAddressLabelRequest"
+            }
+          }
+        ],
+        "tags": [
+          "SwapClient"
+        ]
+      }
+    },
     "/v1/staticaddr/loopin": {
       "post": {
         "summary": "loop:`static in`\nStaticAddressLoopIn initiates a static address loop-in swap.",
@@ -2600,6 +2633,10 @@
         "send_coins_request": {
           "$ref": "#/definitions/lnrpcSendCoinsRequest",
           "description": "If set, loopd initiates a deposit by calling lnd's SendCoins API. If the\nrequest's addr field is empty, loopd creates and funds a new static\naddress. If addr is set, it must be an existing static address known to\nloopd."
+        },
+        "label": {
+          "type": "string",
+          "description": "An optional label for this static address. Empty string means no label."
         }
       }
     },
@@ -2618,6 +2655,10 @@
         "send_coins_response": {
           "$ref": "#/definitions/lnrpcSendCoinsResponse",
           "description": "The response from lnd's SendCoins API, if a deposit was initiated."
+        },
+        "label": {
+          "type": "string",
+          "description": "The label for this static address. Empty string means no label."
         }
       }
     },
@@ -2995,6 +3036,10 @@
           "type": "string",
           "format": "int64",
           "description": "The total value of all deposits that have been used for channel openings."
+        },
+        "label": {
+          "type": "string",
+          "description": "The label for this static address. Empty string means no label."
         }
       }
     },
@@ -3295,6 +3340,32 @@
         }
       }
     },
+    "looprpcUpdateStaticAddressLabelRequest": {
+      "type": "object",
+      "properties": {
+        "static_address": {
+          "type": "string",
+          "description": "The static address whose label should be updated."
+        },
+        "label": {
+          "type": "string",
+          "description": "The updated label for the static address. Empty string means no label."
+        }
+      }
+    },
+    "looprpcUpdateStaticAddressLabelResponse": {
+      "type": "object",
+      "properties": {
+        "static_address": {
+          "type": "string",
+          "description": "The static address whose label was updated."
+        },
+        "label": {
+          "type": "string",
+          "description": "The updated label for the static address. Empty string means no label."
+        }
+      }
+    },
     "looprpcUtxo": {
       "type": "object",
       "properties": {
@@ -3315,6 +3386,10 @@
           "type": "string",
           "format": "int64",
           "description": "The number of confirmations for the Utxo."
+        },
+        "label": {
+          "type": "string",
+          "description": "The label for the static address that owns this Utxo. Empty string means no\nlabel."
         }
       }
     },
