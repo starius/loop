@@ -164,22 +164,22 @@ func (m *Manager) loadActiveAddresses(ctx context.Context) error {
 // The first call also makes sure the legacy/root static address seed exists,
 // because receive and change addresses are derived from the server pubkey and
 // expiry returned for that seed.
-func (m *Manager) NewAddress(ctx context.Context) (*btcutil.AddressTaproot,
-	int64, error) {
+func (m *Manager) NewAddress(ctx context.Context, label string) (
+	*btcutil.AddressTaproot, int64, string, error) {
 
-	params, err := m.NewReceiveAddress(ctx)
+	params, err := m.NewReceiveAddress(ctx, label)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
 	address, err := m.GetTaprootAddress(
 		params.ClientPubkey, params.ServerPubkey, int64(params.Expiry),
 	)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
-	return address, int64(params.Expiry), nil
+	return address, int64(params.Expiry), params.Label, nil
 }
 
 // EnsureStaticAddressSeed loads or creates the legacy/root static address
@@ -273,19 +273,23 @@ func (m *Manager) EnsureStaticAddressSeed(ctx context.Context) (*Parameters,
 
 	return m.createAddressFromKey(
 		ctx, clientPubKey, serverPubKey, serverParams.Expiry,
-		version.AddressProtocolVersion(protocolVersion),
+		version.AddressProtocolVersion(protocolVersion), "",
 	)
 }
 
 // NewReceiveAddress derives, stores, imports and activates the next receive
 // family static address. It is used by `loop static new`.
-func (m *Manager) NewReceiveAddress(ctx context.Context) (*Parameters, error) {
+func (m *Manager) NewReceiveAddress(ctx context.Context,
+	label string) (*Parameters, error) {
+
 	seed, err := m.EnsureStaticAddressSeed(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return m.newDerivedAddress(ctx, seed, swap.StaticMultiAddressKeyFamily)
+	return m.newDerivedAddress(
+		ctx, seed, swap.StaticMultiAddressKeyFamily, label,
+	)
 }
 
 // NewChangeAddress derives, stores, imports and activates the next change
@@ -297,11 +301,13 @@ func (m *Manager) NewChangeAddress(ctx context.Context) (*Parameters, error) {
 		return nil, err
 	}
 
-	return m.newDerivedAddress(ctx, seed, swap.StaticAddressChangeKeyFamily)
+	return m.newDerivedAddress(
+		ctx, seed, swap.StaticAddressChangeKeyFamily, "",
+	)
 }
 
 func (m *Manager) newDerivedAddress(ctx context.Context, seed *Parameters,
-	keyFamily int32) (*Parameters, error) {
+	keyFamily int32, label string) (*Parameters, error) {
 
 	m.Lock()
 	defer m.Unlock()
@@ -313,14 +319,14 @@ func (m *Manager) newDerivedAddress(ctx context.Context, seed *Parameters,
 
 	return m.createAddressFromKey(
 		ctx, clientPubKey, seed.ServerPubkey, seed.Expiry,
-		seed.ProtocolVersion,
+		seed.ProtocolVersion, label,
 	)
 }
 
 func (m *Manager) createAddressFromKey(ctx context.Context,
 	clientPubKey *keychain.KeyDescriptor, serverPubKey *btcec.PublicKey,
-	expiry uint32, protocolVersion version.AddressProtocolVersion) (
-	*Parameters, error) {
+	expiry uint32, protocolVersion version.AddressProtocolVersion,
+	label string) (*Parameters, error) {
 
 	staticAddress, err := script.NewStaticAddress(
 		input.MuSig2Version100RC2, int64(expiry), clientPubKey.PubKey,
@@ -346,6 +352,7 @@ func (m *Manager) createAddressFromKey(ctx context.Context,
 		},
 		ProtocolVersion:  protocolVersion,
 		InitiationHeight: m.currentHeight.Load(),
+		Label:            label,
 	}
 
 	// Import before persisting the address row. If lnd rejects the script
@@ -571,6 +578,28 @@ func (m *Manager) GetParameters(pkScript []byte) *Parameters {
 	defer m.Unlock()
 
 	return m.activeStaticAddresses[string(pkScript)]
+}
+
+// UpdateStaticAddressLabel updates the durable label and the in-memory address
+// index used by RPC responses. Labels are local metadata and don't alter the
+// address script or any server-side state.
+func (m *Manager) UpdateStaticAddressLabel(ctx context.Context,
+	pkScript []byte, label string) error {
+
+	err := m.cfg.Store.UpdateStaticAddressLabel(ctx, pkScript, label)
+	if err != nil {
+		return err
+	}
+
+	m.Lock()
+	defer m.Unlock()
+
+	params, ok := m.activeStaticAddresses[string(pkScript)]
+	if ok {
+		params.Label = label
+	}
+
+	return nil
 }
 
 // GetStaticAddressID returns the database row ID for a static address script.

@@ -124,8 +124,10 @@ func TestManager(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new static address.
-	taprootAddress, expiry, err := testContext.manager.NewAddress(ctxb)
+	taprootAddress, expiry, label, err :=
+		testContext.manager.NewAddress(ctxb, "receive label")
 	require.NoError(t, err)
+	require.Equal(t, "receive label", label)
 
 	// The addresses have to match.
 	require.Equal(t, expectedAddress.String(), taprootAddress.String())
@@ -145,6 +147,44 @@ func TestManager(t *testing.T) {
 	require.EqualValues(
 		t, swap.StaticMultiAddressKeyFamily,
 		addresses[1].KeyLocator.Family,
+	)
+	require.Empty(t, addresses[0].Label)
+	require.Equal(t, "receive label", addresses[1].Label)
+}
+
+// TestNewAddressLabelsArePerAddress verifies each multi-address receive script
+// carries its own local label while the server-provided seed remains unlabeled.
+func TestNewAddressLabelsArePerAddress(t *testing.T) {
+	ctx := t.Context()
+	testContext := NewAddressManagerTestContext(t)
+
+	first, _, firstLabel, err := testContext.manager.NewAddress(ctx, "first")
+	require.NoError(t, err)
+	require.Equal(t, "first", firstLabel)
+
+	second, _, secondLabel, err :=
+		testContext.manager.NewAddress(ctx, "second")
+	require.NoError(t, err)
+	require.Equal(t, "second", secondLabel)
+	require.NotEqual(t, first.String(), second.String())
+
+	addresses, err := testContext.manager.GetAllAddresses(ctx)
+	require.NoError(t, err)
+	require.Len(t, addresses, 3)
+	require.Empty(t, addresses[0].Label)
+	require.Equal(t, "first", addresses[1].Label)
+	require.Equal(t, "second", addresses[2].Label)
+	testContext.mockStaticAddressClient.AssertNumberOfCalls(
+		t, "ServerNewAddress", 1,
+	)
+
+	err = testContext.manager.UpdateStaticAddressLabel(
+		ctx, addresses[1].PkScript, "renamed",
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t, "renamed",
+		testContext.manager.GetParameters(addresses[1].PkScript).Label,
 	)
 }
 
@@ -225,7 +265,7 @@ func TestNewAddressValidatesServerResponse(t *testing.T) {
 				t, test.resp,
 			)
 
-			_, _, err := testContext.manager.NewAddress(t.Context())
+			_, _, _, err := testContext.manager.NewAddress(t.Context(), "")
 			require.ErrorContains(t, err, test.expected)
 		})
 	}
@@ -237,7 +277,7 @@ func TestNewAddressAcceptsMaxCSVExpiry(t *testing.T) {
 		t, newServerNewAddressResponse(maxStaticAddressCSVExpiry),
 	)
 
-	_, expiry, err := testContext.manager.NewAddress(t.Context())
+	_, expiry, _, err := testContext.manager.NewAddress(t.Context(), "")
 	require.NoError(t, err)
 	require.EqualValues(t, maxStaticAddressCSVExpiry, expiry)
 }

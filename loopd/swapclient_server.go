@@ -17,6 +17,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/aperture/l402"
 	"github.com/lightninglabs/lndclient"
@@ -1700,10 +1701,16 @@ func rpcInstantOut(instantOut *instantout.InstantOut) *looprpc.InstantOut {
 }
 
 // NewStaticAddress is the rpc endpoint for loop clients to request a new static
-// address.
+// address. The optional label is local operator metadata and is never sent to
+// the static-address server.
 func (s *swapClientServer) NewStaticAddress(ctx context.Context,
 	req *looprpc.NewStaticAddressRequest) (
 	*looprpc.NewStaticAddressResponse, error) {
+
+	label := req.GetLabel()
+	if err := labels.Validate(label); err != nil {
+		return nil, fmt.Errorf("invalid static address label: %w", err)
+	}
 
 	sendCoinsReq := req.GetSendCoinsRequest()
 	if err := validateStaticAddressSendCoinsRequest(sendCoinsReq); err != nil {
@@ -1714,7 +1721,8 @@ func (s *swapClientServer) NewStaticAddress(ctx context.Context,
 		return s.fundExistingStaticAddress(ctx, sendCoinsReq)
 	}
 
-	staticAddress, expiry, err := s.staticAddressManager.NewAddress(ctx)
+	staticAddress, expiry, storedLabel, err :=
+		s.staticAddressManager.NewAddress(ctx, label)
 	if err != nil {
 		return nil, err
 	}
@@ -1731,13 +1739,15 @@ func (s *swapClientServer) NewStaticAddress(ctx context.Context,
 		Address:           staticAddress.String(),
 		Expiry:            uint32(expiry),
 		SendCoinsResponse: sendCoinsResp,
+		Label:             storedLabel,
 	}, nil
 }
 
 func (s *swapClientServer) fundExistingStaticAddress(ctx context.Context,
 	req *lnrpc.SendCoinsRequest) (*looprpc.NewStaticAddressResponse, error) {
 
-	staticAddress, expiry, err := s.staticAddressForDeposit(ctx, req.Addr)
+	staticAddress, expiry, label, err :=
+		s.staticAddressForDeposit(ctx, req.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -1754,15 +1764,16 @@ func (s *swapClientServer) fundExistingStaticAddress(ctx context.Context,
 		Address:           staticAddress,
 		Expiry:            expiry,
 		SendCoinsResponse: sendCoinsResp,
+		Label:             label,
 	}, nil
 }
 
 func (s *swapClientServer) staticAddressForDeposit(ctx context.Context,
-	addr string) (string, uint32, error) {
+	addr string) (string, uint32, string, error) {
 
 	addresses, err := s.staticAddressManager.GetAllAddresses(ctx)
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	for _, params := range addresses {
@@ -1771,16 +1782,52 @@ func (s *swapClientServer) staticAddressForDeposit(ctx context.Context,
 			int64(params.Expiry),
 		)
 		if err != nil {
-			return "", 0, err
+			return "", 0, "", err
 		}
 
 		if staticAddress.String() == addr {
-			return addr, params.Expiry, nil
+			return addr, params.Expiry, params.Label, nil
 		}
 	}
 
-	return "", 0, status.Errorf(codes.InvalidArgument,
+	return "", 0, "", status.Errorf(codes.InvalidArgument,
 		"send_coins_request.addr is not a known static address")
+}
+
+// UpdateStaticAddressLabel updates local metadata for a static address without
+// changing its script or contacting the static-address server.
+func (s *swapClientServer) UpdateStaticAddressLabel(ctx context.Context,
+	req *looprpc.UpdateStaticAddressLabelRequest) (
+	*looprpc.UpdateStaticAddressLabelResponse, error) {
+
+	label := req.GetLabel()
+	if err := labels.Validate(label); err != nil {
+		return nil, fmt.Errorf("invalid static address label: %w", err)
+	}
+
+	staticAddress, err := btcutil.DecodeAddress(
+		req.GetStaticAddress(), s.lnd.ChainParams,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("decode static address: %w", err)
+	}
+
+	pkScript, err := txscript.PayToAddrScript(staticAddress)
+	if err != nil {
+		return nil, fmt.Errorf("static address pkScript: %w", err)
+	}
+
+	err = s.staticAddressManager.UpdateStaticAddressLabel(
+		ctx, pkScript, label,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update static address label: %w", err)
+	}
+
+	return &looprpc.UpdateStaticAddressLabelResponse{
+		StaticAddress: staticAddress.String(),
+		Label:         label,
+	}, nil
 }
 
 func validateStaticAddressSendCoinsRequest(req *lnrpc.SendCoinsRequest) error {
@@ -1942,6 +1989,7 @@ func (s *swapClientServer) ListUnspentDeposits(ctx context.Context,
 			AmountSat:     int64(u.Value),
 			Confirmations: u.Confirmations,
 			Outpoint:      u.OutPoint.String(),
+			Label:         params.Label,
 		}
 		respUtxos = append(respUtxos, utxo)
 	}
@@ -2343,6 +2391,7 @@ func (s *swapClientServer) GetStaticAddressSummary(ctx context.Context,
 		ValueLoopedInSatoshis:          valueLoopedIn,
 		ValueChannelsOpened:            valueChannelsOpened,
 		ValueHtlcTimeoutSweepsSatoshis: htlcTimeoutSwept,
+		Label:                          params.Label,
 	}, nil
 }
 
