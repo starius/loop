@@ -89,7 +89,9 @@ func (f *FSM) PublishDepositExpirySweepAction(ctx context.Context,
 		return f.HandleError(err)
 	}
 
-	rawSigs, err := f.cfg.Signer.SignOutputRaw(
+	// Use the locator-aware RPC when SignDescriptor validated the stored
+	// path. Its pubkey-only fallback preserves the legacy sweep path.
+	rawSigs, err := f.cfg.Signer.SignOutputRawKeyLocator(
 		ctx, msgTx, []*lndclient.SignDescriptor{signDesc}, prevOut,
 	)
 	if err != nil {

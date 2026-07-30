@@ -538,16 +538,58 @@ func (f *FSM) Errorf(format string, args ...any) {
 func (f *FSM) SignDescriptor(ctx context.Context) (*lndclient.SignDescriptor,
 	error) {
 
+	// Persisted rows may predate current validation, so validate every value
+	// that affects CSV execution before asking lnd to sign.
+	if f.params == nil {
+		return nil, fmt.Errorf("static address parameters are nil")
+	}
+	if f.params.ClientPubkey == nil {
+		return nil, fmt.Errorf("static address client public key is nil")
+	}
+	if err := script.ValidateExpiry(f.params.Expiry); err != nil {
+		return nil, err
+	}
+
+	// Start with the legacy descriptor so a transient derivation failure
+	// cannot disable an expiry sweep on a wallet that still has the key
+	// cached by public key.
+	signingKey := keychain.KeyDescriptor{
+		PubKey: f.params.ClientPubkey,
+	}
+
+	// Re-derive the stored locator and bind it to the persisted public key.
+	// A valid locator lets restored wallets derive uncached keys directly.
+	derivedKey, err := f.cfg.WalletKit.DeriveKey(
+		ctx, &f.params.KeyLocator,
+	)
+	if err != nil {
+		log.Warnf("Deposit %v: unable to validate static address key "+
+			"locator, falling back to public-key signing: %v",
+			f.deposit.OutPoint, err)
+	} else {
+		if derivedKey == nil || derivedKey.PubKey == nil {
+			return nil, fmt.Errorf("wallet returned an empty client key")
+		}
+		if !derivedKey.PubKey.IsEqual(f.params.ClientPubkey) {
+			return nil, fmt.Errorf("derived client key does not match " +
+				"static address parameters")
+		}
+
+		signingKey.KeyLocator = f.params.KeyLocator
+	}
+
+	// Reconstruct the timeout leaf only after the signing key is validated.
 	address, err := f.cfg.AddressManager.GetStaticAddress(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if address == nil || address.TimeoutLeaf == nil {
+		return nil, fmt.Errorf("static address timeout leaf is nil")
+	}
 
 	return &lndclient.SignDescriptor{
 		WitnessScript: address.TimeoutLeaf.Script,
-		KeyDesc: keychain.KeyDescriptor{
-			PubKey: f.params.ClientPubkey,
-		},
+		KeyDesc:       signingKey,
 		Output: wire.NewTxOut(
 			int64(f.deposit.Value), f.params.PkScript,
 		),

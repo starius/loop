@@ -10,6 +10,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/loop/staticaddr/script"
@@ -18,6 +19,7 @@ import (
 	"github.com/lightninglabs/loop/test"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/input"
+	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/stretchr/testify/mock"
@@ -291,7 +293,16 @@ func TestManager(t *testing.T) {
 
 	// Ensure that the deposit state machine signed the expiry tx.
 	select {
-	case <-testContext.mockLnd.SignOutputRawChannel:
+	case signRequest := <-testContext.mockLnd.SignOutputRawChannel:
+		require.True(t, signRequest.UseKeyLocator)
+		require.Len(t, signRequest.SignDescriptors, 1)
+		signDesc := signRequest.SignDescriptors[0]
+		require.Equal(t, keychain.KeyLocator{
+			Family: keychain.KeyFamily(swap.StaticAddressKeyFamily),
+			Index:  0,
+		}, signDesc.KeyDesc.KeyLocator)
+		_, clientPubkey := test.CreateKey(0)
+		require.True(t, signDesc.KeyDesc.PubKey.IsEqual(clientPubkey))
 
 	case <-time.After(defaultTimeout):
 		t.Fatal("did not receive sign request")
@@ -329,6 +340,102 @@ func TestManager(t *testing.T) {
 	case <-time.After(defaultTimeout):
 		t.Fatal("manager did not stop")
 	}
+}
+
+// testKeyDeriver supplies a configured locator-derived key to an expiry FSM.
+type testKeyDeriver struct {
+	// WalletKitClient provides methods unrelated to these tests.
+	lndclient.WalletKitClient
+
+	// key is the configured derivation result.
+	key *keychain.KeyDescriptor
+
+	// err is the configured derivation failure.
+	err error
+}
+
+// DeriveKey returns the configured key descriptor or error.
+func (d *testKeyDeriver) DeriveKey(context.Context,
+	*keychain.KeyLocator) (*keychain.KeyDescriptor, error) {
+
+	return d.key, d.err
+}
+
+// TestSignDescriptorUsesStoredKeyLocator checks locator-aware expiry signing,
+// public-key binding, derivation fallback, and persisted expiry validation.
+func TestSignDescriptorUsesStoredKeyLocator(t *testing.T) {
+	t.Parallel()
+
+	_, clientPubKey := test.CreateKey(12)
+	_, serverPubKey := test.CreateKey(13)
+	locator := keychain.KeyLocator{
+		Family: keychain.KeyFamily(swap.StaticAddressKeyFamily),
+		Index:  12,
+	}
+	params := &script.Parameters{
+		ClientPubkey: clientPubKey,
+		Expiry:       defaultExpiry,
+		PkScript:     []byte{1, 2, 3},
+		KeyLocator:   locator,
+	}
+	staticAddress, err := script.NewStaticAddress(
+		input.MuSig2Version100RC2, int64(params.Expiry),
+		clientPubKey, serverPubKey,
+	)
+	require.NoError(t, err)
+	addressManager := new(mockAddressManager)
+	addressManager.On(
+		"GetStaticAddress", mock.Anything,
+	).Return(staticAddress, nil)
+
+	fsm := &FSM{
+		cfg: &ManagerConfig{
+			AddressManager: addressManager,
+			WalletKit: &testKeyDeriver{
+				key: &keychain.KeyDescriptor{
+					KeyLocator: locator,
+					PubKey:     clientPubKey,
+				},
+			},
+		},
+		deposit: &Deposit{Value: 50_000},
+		params:  params,
+	}
+
+	signDesc, err := fsm.SignDescriptor(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, locator, signDesc.KeyDesc.KeyLocator)
+	require.True(t, signDesc.KeyDesc.PubKey.IsEqual(clientPubKey))
+	require.Equal(t, staticAddress.TimeoutLeaf.Script,
+		signDesc.WitnessScript)
+	require.Equal(t, txscript.SigHashDefault, signDesc.HashType)
+	require.Equal(t, input.TaprootScriptSpendSignMethod,
+		signDesc.SignMethod)
+
+	_, wrongPubKey := test.CreateKey(14)
+	fsm.cfg.WalletKit = &testKeyDeriver{
+		key: &keychain.KeyDescriptor{
+			KeyLocator: locator,
+			PubKey:     wrongPubKey,
+		},
+	}
+	_, err = fsm.SignDescriptor(t.Context())
+	require.ErrorContains(t, err, "derived client key does not match")
+
+	fsm.cfg.WalletKit = &testKeyDeriver{}
+	_, err = fsm.SignDescriptor(t.Context())
+	require.ErrorContains(t, err, "wallet returned an empty client key")
+
+	deriveErr := errors.New("derive key")
+	fsm.cfg.WalletKit = &testKeyDeriver{err: deriveErr}
+	signDesc, err = fsm.SignDescriptor(t.Context())
+	require.NoError(t, err)
+	require.True(t, signDesc.KeyDesc.KeyLocator.IsEmpty())
+	require.True(t, signDesc.KeyDesc.PubKey.IsEqual(clientPubKey))
+
+	fsm.params.Expiry = 0
+	_, err = fsm.SignDescriptor(t.Context())
+	require.ErrorContains(t, err, "must be non-zero")
 }
 
 // TestManagerReplaysStartupBlockToRecoveredDeposits verifies that the initial
@@ -541,10 +648,17 @@ func newManagerTestContext(t *testing.T) *ManagerTestContext {
 	).Return(nil)
 
 	var manager *Manager
+	_, clientPubkey := test.CreateKey(0)
 	mockAddressManager.On(
 		"GetStaticAddressParameters", mock.Anything,
 	).Return(&script.Parameters{
-		Expiry: defaultExpiry,
+		ClientPubkey: clientPubkey,
+		Expiry:       defaultExpiry,
+		PkScript:     utxo.PkScript,
+		KeyLocator: keychain.KeyLocator{
+			Family: keychain.KeyFamily(swap.StaticAddressKeyFamily),
+			Index:  0,
+		},
 	}, nil)
 
 	mockAddressManager.On(

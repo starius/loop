@@ -118,8 +118,14 @@ type SingleInvoiceSubscription struct {
 
 // SignOutputRawRequest contains input data for a tx signing request.
 type SignOutputRawRequest struct {
-	Tx              *wire.MsgTx
+	// Tx is the transaction supplied to the signer.
+	Tx *wire.MsgTx
+
+	// SignDescriptors are the requested input signatures.
 	SignDescriptors []*lndclient.SignDescriptor
+
+	// UseKeyLocator distinguishes locator-aware signing from legacy signing.
+	UseKeyLocator bool
 }
 
 // PublishHandler is optional transaction handler function called upon calling

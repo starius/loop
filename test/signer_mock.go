@@ -31,13 +31,32 @@ func (s *mockSigner) RawClientWithMacAuth(
 	return ctx, 0, nil
 }
 
+// SignOutputRaw records a legacy public-key signing request.
 func (s *mockSigner) SignOutputRaw(ctx context.Context, tx *wire.MsgTx,
 	signDescriptors []*lndclient.SignDescriptor,
 	_ []*wire.TxOut) ([][]byte, error) {
 
+	return s.signOutputRaw(tx, signDescriptors, false)
+}
+
+// SignOutputRawKeyLocator records a locator-aware signing request.
+func (s *mockSigner) SignOutputRawKeyLocator(_ context.Context,
+	tx *wire.MsgTx, signDescriptors []*lndclient.SignDescriptor,
+	_ []*wire.TxOut) ([][]byte, error) {
+
+	return s.signOutputRaw(tx, signDescriptors, true)
+}
+
+// signOutputRaw records common request data and returns deterministic dummy
+// signatures.
+func (s *mockSigner) signOutputRaw(tx *wire.MsgTx,
+	signDescriptors []*lndclient.SignDescriptor,
+	useKeyLocator bool) ([][]byte, error) {
+
 	s.lnd.SignOutputRawChannel <- SignOutputRawRequest{
 		Tx:              tx,
 		SignDescriptors: signDescriptors,
+		UseKeyLocator:   useKeyLocator,
 	}
 
 	rawSigs := make([][]byte, len(signDescriptors))

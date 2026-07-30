@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -771,8 +772,7 @@ func lockDeposits(deposits []*Deposit) []*Deposit {
 
 // unlockDeposits unlocks deposits in reverse lock order.
 func unlockDeposits(deposits []*Deposit) {
-	for i := len(deposits) - 1; i >= 0; i-- {
-		d := deposits[i]
+	for _, d := range slices.Backward(deposits) {
 		d.Unlock()
 	}
 }
