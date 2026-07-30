@@ -150,12 +150,23 @@ func GetPrevoutInfo(prevOuts map[wire.OutPoint]*wire.TxOut,
 // First sort based on input hash (reversed / rpc-style), then index.
 // The code is based on btcd/btcutil/txsort/txsort.go.
 func bip69inputLess(input1, input2 *swapserverrpc.PrevoutInfo) bool {
+	return bip69Less(
+		input1.TxidBytes, input1.OutputIndex,
+		input2.TxidBytes, input2.OutputIndex,
+	)
+}
+
+// bip69Less compares an outpoint hash and index pair using BIP-69's displayed
+// transaction-hash byte order.
+func bip69Less(txid1 []byte, index1 uint32, txid2 []byte,
+	index2 uint32) bool {
+
 	// Input hashes are the same, so compare the index.
 	var ihash, jhash chainhash.Hash
-	copy(ihash[:], input1.TxidBytes)
-	copy(jhash[:], input2.TxidBytes)
+	copy(ihash[:], txid1)
+	copy(jhash[:], txid2)
 	if ihash == jhash {
-		return input1.OutputIndex < input2.OutputIndex
+		return index1 < index2
 	}
 
 	// At this point, the hashes are not equal, so reverse them to

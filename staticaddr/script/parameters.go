@@ -1,10 +1,40 @@
 package script
 
 import (
+	"fmt"
+
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/loop/staticaddr/version"
 	"github.com/lightningnetwork/lnd/keychain"
 )
+
+const (
+	// MaxCSVExpiry caps a static-address delay at 200 days, assuming 144
+	// blocks per day.
+	MaxCSVExpiry = uint32(200 * 144)
+)
+
+// ValidateExpiry validates a persisted static-address CSV expiry. Persisted
+// values are checked again before signing because older or corrupt database
+// rows may not have passed current address-creation validation.
+func ValidateExpiry(expiry uint32) error {
+	switch {
+	case expiry == 0:
+		return fmt.Errorf("static address CSV expiry must be non-zero")
+
+	case expiry&^wire.SequenceLockTimeMask != 0:
+		return fmt.Errorf("static address expiry does not fit into CSV: %x",
+			expiry)
+
+	case expiry > MaxCSVExpiry:
+		return fmt.Errorf("static address CSV expiry %v exceeds maximum %v",
+			expiry, MaxCSVExpiry)
+
+	default:
+		return nil
+	}
+}
 
 // Parameters holds all the necessary information for the 2-of-2 multisig
 // address.

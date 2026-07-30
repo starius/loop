@@ -199,7 +199,7 @@ func TestNewAddressValidatesServerResponse(t *testing.T) {
 		{
 			name: "too large",
 			resp: newServerNewAddressResponse(
-				maxStaticAddressCSVExpiry + 1,
+				script.MaxCSVExpiry + 1,
 			),
 			expected: "exceeds maximum",
 		},
@@ -220,12 +220,12 @@ func TestNewAddressValidatesServerResponse(t *testing.T) {
 // TestNewAddressAcceptsMaxCSVExpiry tests the upper valid CSV boundary.
 func TestNewAddressAcceptsMaxCSVExpiry(t *testing.T) {
 	testContext := NewAddressManagerTestContextWithResponse(
-		t, newServerNewAddressResponse(maxStaticAddressCSVExpiry),
+		t, newServerNewAddressResponse(script.MaxCSVExpiry),
 	)
 
 	_, expiry, err := testContext.manager.NewAddress(t.Context())
 	require.NoError(t, err)
-	require.EqualValues(t, maxStaticAddressCSVExpiry, expiry)
+	require.EqualValues(t, script.MaxCSVExpiry, expiry)
 }
 
 // GenerateExpectedTaprootAddress generates the expected taproot address that

@@ -11,7 +11,6 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/loop/staticaddr/script"
 	"github.com/lightninglabs/loop/staticaddr/version"
@@ -20,13 +19,6 @@ import (
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnwallet"
-)
-
-const (
-	// maxStaticAddressCSVExpiry is the maximum CSV delay that we accept
-	// from the server for a static address timeout path: 200 days at 144
-	// blocks per day.
-	maxStaticAddressCSVExpiry = uint32(200 * 144)
 )
 
 // ManagerConfig holds the configuration for the address manager.
@@ -255,18 +247,8 @@ func validateServerAddressParams(
 			"secp256k1 public key")
 	}
 
-	expiry := params.GetExpiry()
-	switch {
-	case expiry == 0:
-		return fmt.Errorf("static address CSV expiry must be non-zero")
-
-	case expiry&^wire.SequenceLockTimeMask != 0:
-		return fmt.Errorf("static address expiry does not fit into "+
-			"CSV: %x", expiry)
-
-	case expiry > maxStaticAddressCSVExpiry:
-		return fmt.Errorf("static address CSV expiry %v exceeds "+
-			"maximum %v", expiry, maxStaticAddressCSVExpiry)
+	if err := script.ValidateExpiry(params.GetExpiry()); err != nil {
+		return err
 	}
 
 	return nil
@@ -290,7 +272,8 @@ func (m *Manager) GetTaprootAddress(clientPubkey, serverPubkey *btcec.PublicKey,
 	)
 }
 
-// ListUnspentRaw returns a list of utxos at the static address.
+// ListUnspentRaw returns the address and matching wallet UTXOs without
+// applying deposit FSM state. Confirmation bounds are forwarded to lnd.
 func (m *Manager) ListUnspentRaw(ctx context.Context, minConfs,
 	maxConfs int32) (*btcutil.AddressTaproot, []*lnwallet.Utxo, error) {
 
@@ -308,8 +291,8 @@ func (m *Manager) ListUnspentRaw(ctx context.Context, minConfs,
 
 	staticAddress := addresses[0]
 
-	// List all unspent utxos the wallet sees, regardless of the number of
-	// confirmations.
+	// Ask lnd for the current UTXO set within the requested confirmation
+	// bounds.
 	utxos, err := m.cfg.WalletKit.ListUnspent(
 		ctx, minConfs, maxConfs,
 	)
