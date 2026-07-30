@@ -2,10 +2,17 @@ module github.com/lightninglabs/loop
 
 require (
 	github.com/btcsuite/btcd v0.25.1-0.20260310163610-1c55c7c18179
-	github.com/btcsuite/btcd/btcec/v2 v2.3.6
+	github.com/btcsuite/btcd/address/v2 v2.0.0
+	github.com/btcsuite/btcd/bip322 v0.0.0-20260714073843-479af04dd0a8
+	github.com/btcsuite/btcd/btcec/v2 v2.5.0
 	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/btcsuite/btcd/btcutil/psbt v1.1.10
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
+	github.com/btcsuite/btcd/chaincfg/v2 v2.0.0
+	github.com/btcsuite/btcd/chainhash/v2 v2.0.0
+	github.com/btcsuite/btcd/psbt/v2 v2.0.0
+	github.com/btcsuite/btcd/txscript/v2 v2.0.0
+	github.com/btcsuite/btcd/wire/v2 v2.0.0
 	github.com/btcsuite/btclog/v2 v2.0.1-0.20250728225537-6090e87c6c5b
 	github.com/btcsuite/btcwallet v0.16.18
 	github.com/btcsuite/btcwallet/wtxmgr v1.5.6
@@ -42,6 +49,11 @@ require (
 	gopkg.in/macaroon-bakery.v2 v2.3.0
 	gopkg.in/macaroon.v2 v2.1.0
 	modernc.org/sqlite v1.34.5
+)
+
+require (
+	github.com/btcsuite/btcd/btcutil/v2 v2.0.0 // indirect
+	github.com/kcalvinalvin/anet v0.0.0-20251112173137-d8ddc1f6dbee // indirect
 )
 
 require (
@@ -229,6 +241,15 @@ replace dario.cat/mergo => github.com/darccio/mergo v1.0.1
 replace go.augendre.info/arangolint => github.com/Crocmagnon/arangolint v0.4.0
 
 replace go.augendre.info/fatcontext => github.com/Crocmagnon/fatcontext v0.9.0
+
+// These three modules pin btcd PR #2521 at commit
+// 479af04dd0a8cb6035d1ad9af3274fdc5b4e4c06. Replace them with an upstream
+// btcsuite release once BIP-322 support is merged and tagged.
+replace github.com/btcsuite/btcd/bip322 => github.com/guggero/btcd/bip322 v0.0.0-20260714073843-479af04dd0a8
+
+replace github.com/btcsuite/btcd/psbt/v2 => github.com/guggero/btcd/psbt/v2 v2.0.0-20260714073843-479af04dd0a8
+
+replace github.com/btcsuite/btcd/txscript/v2 => github.com/guggero/btcd/txscript/v2 v2.0.0-20260714073843-479af04dd0a8
 
 go 1.25.12
 
