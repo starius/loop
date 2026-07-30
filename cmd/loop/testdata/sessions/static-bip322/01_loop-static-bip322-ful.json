@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "args": [
+      "/home/user/bin/loop",
+      "static",
+      "bip322",
+      "ful",
+      "--network",
+      "regtest",
+      "--message",
+      "Loop BIP-322 full demo challenge"
+    ],
+    "env": {},
+    "version": "0.34.0-beta commit= commit_hash=",
+    "duration": 29230348,
+    "clock_start_unix": 1785403907
+  },
+  "events": [
+    {
+      "time_ms": 2,
+      "kind": "stderr",
+      "data": {
+        "lines": [
+          "WARNING: this proof reveals the static address timeout leaf, client key, CSV delay, and control-block internal key. It strongly fingerprints a Loop-style static address. Anyone who receives the proof can retain it and link the listed outpoints to the identity or context in the message.\n"
+        ]
+      }
+    },
+    {
+      "time_ms": 2,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/SignStaticAddressBip322",
+        "event": "request",
+        "message_type": "looprpc.StaticAddressBip322Request",
+        "payload": {
+          "message": "Loop BIP-322 full demo challenge",
+          "signature_type": "BIP322_SIGNATURE_TYPE_FULL",
+          "outpoints": [],
+          "all": false
+        }
+      }
+    },
+    {
+      "time_ms": 28,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/SignStaticAddressBip322",
+        "event": "response",
+        "message_type": "looprpc.StaticAddressBip322Response",
+        "payload": {
+          "address": "bcrt1plhnu795j3mszsws9vkxd3aeg8ap45dweht5mc88j64hm6h2egefqynk3yh",
+          "signature_type": "BIP322_SIGNATURE_TYPE_FULL",
+          "signature": "fulAgAAAAABAZp8vT7Mh/Q0n2sCppn4EK+02FuamYOsVqoE48IgFRwVAAAAAABAOAAAAQAAAAAAAAAAAWoDQBPKVTSXELADj2rv1iqlNKeRHtofbXkkU1jAlFrB8EBaPMRA1LvYlfZ/f3bVDTypU+9qjD+bCZCdUUFe7e0A1EkmID+rr02wWL+CiXxuRcy3FjoklGLqOoTwa9mlsvl1dud3rQJAOLIhwEY4+76top/ZczJXe+UzTGQ8Y2Yr8AbFPTNz0bsGEl6KAAAAAA==",
+          "constrained": true,
+          "valid_at_time": 0,
+          "valid_at_age": 14400,
+          "deposits": [],
+          "total_amount_sat": "0"
+        }
+      }
+    },
+    {
+      "time_ms": 28,
+      "kind": "stdout",
+      "data": {
+        "lines": [
+          "{\n",
+          "    \"address\": \"bcrt1plhnu795j3mszsws9vkxd3aeg8ap45dweht5mc88j64hm6h2egefqynk3yh\",\n",
+          "    \"constrained\": true,\n",
+          "    \"deposits\": [],\n",
+          "    \"signature\": \"fulAgAAAAABAZp8vT7Mh/Q0n2sCppn4EK+02FuamYOsVqoE48IgFRwVAAAAAABAOAAAAQAAAAAAAAAAAWoDQBPKVTSXELADj2rv1iqlNKeRHtofbXkkU1jAlFrB8EBaPMRA1LvYlfZ/f3bVDTypU+9qjD+bCZCdUUFe7e0A1EkmID+rr02wWL+CiXxuRcy3FjoklGLqOoTwa9mlsvl1dud3rQJAOLIhwEY4+76top/ZczJXe+UzTGQ8Y2Yr8AbFPTNz0bsGEl6KAAAAAA==\",\n",
+          "    \"signature_type\": \"BIP322_SIGNATURE_TYPE_FULL\",\n",
+          "    \"total_amount_sat\": \"0\",\n",
+          "    \"valid_at_age\": 14400,\n",
+          "    \"valid_at_time\": 0\n",
+          "}\n"
+        ]
+      }
+    },
+    {
+      "time_ms": 29,
+      "kind": "exit",
+      "data": {}
+    }
+  ]
+}

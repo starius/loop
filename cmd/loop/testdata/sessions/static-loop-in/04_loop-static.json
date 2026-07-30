@@ -26,6 +26,7 @@
           "COMMANDS:\n",
           "   new, n           Create a new static loop in address.\n",
           "   listunspent, l   List unspent static address outputs.\n",
+          "   bip322           Sign a message with a static address or prove ownership of its funds.\n",
           "   listdeposits     Displays static address deposits. A filter can be applied to only show deposits in a specific state.\n",
           "   listwithdrawals  Display a summary of past withdrawals.\n",
           "   listswaps        Shows a list of static address swaps.\n",

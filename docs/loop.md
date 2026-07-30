@@ -566,6 +566,60 @@ The following flags are supported:
 | `--max_confs="…"` | The maximum number of confirmations an output could have to be listed  | int  |      `0`      |
 | `--help` (`-h`)   | show help                                                              | bool |    `false`    |
 
+### `static bip322` subcommand
+
+Sign a message with a static address or prove ownership of its funds.
+
+Usage:
+
+```bash
+$ loop [GLOBAL FLAGS] static bip322 [COMMAND FLAGS] [ARGUMENTS...]
+```
+
+The following flags are supported:
+
+| Name            | Description | Type | Default value |
+|-----------------|-------------|------|:-------------:|
+| `--help` (`-h`) | show help   | bool |    `false`    |
+
+### `static bip322 ful` subcommand
+
+Sign a message with a static address.
+
+Usage:
+
+```bash
+$ loop [GLOBAL FLAGS] static bip322 ful [COMMAND FLAGS] [ARGUMENTS...]
+```
+
+The following flags are supported:
+
+| Name                 | Description                                                                 | Type   | Default value |
+|----------------------|-----------------------------------------------------------------------------|--------|:-------------:|
+| `--message="…"`      | the exact UTF-8 message to sign                                             | string |
+| `--message_file="…"` | read the exact UTF-8 message from a file; mutually exclusive with --message | string |
+| `--help` (`-h`)      | show help                                                                   | bool   |    `false`    |
+
+### `static bip322 pof` subcommand
+
+Prove ownership of funds held at the static address.
+
+Usage:
+
+```bash
+$ loop [GLOBAL FLAGS] static bip322 pof [COMMAND FLAGS] [ARGUMENTS...]
+```
+
+The following flags are supported:
+
+| Name                 | Description                                                                 | Type   | Default value |
+|----------------------|-----------------------------------------------------------------------------|--------|:-------------:|
+| `--message="…"`      | the exact UTF-8 message to sign                                             | string |
+| `--message_file="…"` | read the exact UTF-8 message from a file; mutually exclusive with --message | string |
+| `--utxo="…"`         | include a deposit outpoint (txid:vout); repeat for multiple deposits        | string |     `[]`      |
+| `--all`              | include all confirmed deposits lnd reports unspent                          | bool   |    `false`    |
+| `--help` (`-h`)      | show help                                                                   | bool   |    `false`    |
+
 ### `static listdeposits` subcommand
 
 Displays static address deposits. A filter can be applied to only show deposits in a specific state.

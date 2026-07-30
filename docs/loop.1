@@ -439,6 +439,42 @@ List unspent static address outputs.
 .PP
 \fB--min_confs\fP="": The minimum amount of confirmations an output should have to be listed. (default: 0)
 
+.SS bip322
+Sign a message with a static address or prove ownership of its funds.
+
+.PP
+\fB--help, -h\fP: show help
+
+.SS ful
+Sign a message with a static address.
+
+.PP
+\fB--help, -h\fP: show help
+
+.PP
+\fB--message\fP="": the exact UTF-8 message to sign
+
+.PP
+\fB--message_file\fP="": read the exact UTF-8 message from a file; mutually exclusive with --message
+
+.SS pof
+Prove ownership of funds held at the static address.
+
+.PP
+\fB--all\fP: include all confirmed deposits lnd reports unspent
+
+.PP
+\fB--help, -h\fP: show help
+
+.PP
+\fB--message\fP="": the exact UTF-8 message to sign
+
+.PP
+\fB--message_file\fP="": read the exact UTF-8 message from a file; mutually exclusive with --message
+
+.PP
+\fB--utxo\fP="": include a deposit outpoint (txid:vout); repeat for multiple deposits (default: [])
+
 .SS listdeposits
 Displays static address deposits. A filter can be applied to only show deposits in a specific state.
 

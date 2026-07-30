@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lightninglabs/loop/labels"
 	"github.com/lightninglabs/loop/looprpc"
@@ -19,6 +21,20 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+const (
+	// allFlagName is shared by static-address commands that select every
+	// eligible deposit.
+	allFlagName = "all"
+
+	// utxoFlagName is shared by static-address commands with explicit coin
+	// selection.
+	utxoFlagName = "utxo"
+
+	// bip322MaxMessageBytes mirrors loopd's API limit so oversized messages
+	// fail before an RPC is attempted.
+	bip322MaxMessageBytes = 4 * 1024
+)
+
 func init() {
 	commands = append(commands, staticAddressCommands)
 }
@@ -30,6 +46,7 @@ var staticAddressCommands = &cli.Command{
 	Commands: []*cli.Command{
 		newStaticAddressCommand,
 		listUnspentCommand,
+		bip322Command,
 		listDepositsCommand,
 		listWithdrawalsCommand,
 		listStaticAddressSwapsCommand,
@@ -129,6 +146,166 @@ func listUnspent(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
+// bip322Command groups static-address message signing and fund ownership
+// proofs.
+var bip322Command = &cli.Command{
+	Name:  "bip322",
+	Usage: "Sign a message with a static address or prove ownership of its funds.",
+	Commands: []*cli.Command{
+		{
+			Name:   "ful",
+			Usage:  "Sign a message with a static address.",
+			Flags:  bip322MessageFlags(),
+			Action: bip322Full,
+		},
+		{
+			Name:  "pof",
+			Usage: "Prove ownership of funds held at the static address.",
+			Flags: append(bip322MessageFlags(),
+				&cli.StringSliceFlag{
+					Name: utxoFlagName,
+					Usage: "include a deposit outpoint (txid:vout); " +
+						"repeat for multiple deposits",
+				},
+				&cli.BoolFlag{
+					Name:  allFlagName,
+					Usage: "include all confirmed deposits lnd reports unspent",
+				},
+			),
+			Action: bip322ProofOfFunds,
+		},
+	},
+}
+
+// bip322MessageFlags returns fresh message flags for each signing subcommand.
+func bip322MessageFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:  "message",
+			Usage: "the exact UTF-8 message to sign",
+		},
+		&cli.StringFlag{
+			Name: "message_file",
+			Usage: "read the exact UTF-8 message from a file; " +
+				"mutually exclusive with --message",
+		},
+	}
+}
+
+// bip322Full signs a message without selecting real deposit inputs.
+func bip322Full(ctx context.Context, cmd *cli.Command) error {
+	return signStaticAddressBip322(
+		ctx, cmd,
+		looprpc.Bip322SignatureType_BIP322_SIGNATURE_TYPE_FULL,
+	)
+}
+
+// bip322ProofOfFunds signs a message and selected deposit inputs.
+func bip322ProofOfFunds(ctx context.Context, cmd *cli.Command) error {
+	return signStaticAddressBip322(
+		ctx, cmd,
+		looprpc.Bip322SignatureType_BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS,
+	)
+}
+
+// signStaticAddressBip322 validates CLI selection, displays the privacy
+// warning, and delegates signing to loopd.
+func signStaticAddressBip322(ctx context.Context, cmd *cli.Command,
+	signatureType looprpc.Bip322SignatureType) error {
+
+	if cmd.NArg() > 0 {
+		return showCommandHelp(ctx, cmd)
+	}
+
+	message, err := bip322Message(cmd)
+	if err != nil {
+		return err
+	}
+
+	req := &looprpc.StaticAddressBip322Request{
+		Message:       message,
+		SignatureType: signatureType,
+	}
+
+	// Deposit selection applies only to pof. Full signatures contain only
+	// BIP-322's virtual challenge input.
+	if signatureType ==
+		looprpc.Bip322SignatureType_BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS {
+
+		utxos := cmd.StringSlice(utxoFlagName)
+		hasAll := cmd.Bool(allFlagName)
+		hasUtxos := len(utxos) > 0
+		if hasAll == hasUtxos {
+			return errors.New("select exactly one of --all or --utxo")
+		}
+
+		req.All = hasAll
+		if hasUtxos {
+			req.Outpoints = utxos
+			if containsDuplicates(req.Outpoints) {
+				return errors.New("duplicate outpoints detected")
+			}
+		}
+	}
+
+	client, cleanup, err := getClient(cmd)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Both variants reveal the hidden timeout leaf and internal key; pof
+	// additionally links every selected outpoint.
+	fmt.Fprintln(os.Stderr, "WARNING: this proof reveals the static "+
+		"address timeout leaf, client key, CSV delay, and "+
+		"control-block internal key. It strongly fingerprints a "+
+		"Loop-style static address. Anyone who receives the proof "+
+		"can retain it and link the listed outpoints to the "+
+		"identity or context in the message.")
+
+	resp, err := client.SignStaticAddressBip322(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	printRespJSON(resp)
+
+	return nil
+}
+
+// bip322Message returns the exact UTF-8 bytes supplied inline or by file.
+func bip322Message(cmd *cli.Command) (string, error) {
+	hasMessage := cmd.IsSet("message")
+	hasFile := cmd.IsSet("message_file")
+	if hasMessage == hasFile {
+		return "", errors.New(
+			"select exactly one of --message or --message_file",
+		)
+	}
+
+	// Do not trim file content: line endings and whitespace are signed data.
+	var messageBytes []byte
+	if hasMessage {
+		messageBytes = []byte(cmd.String("message"))
+	} else {
+		var err error
+		messageBytes, err = os.ReadFile(cmd.String("message_file"))
+		if err != nil {
+			return "", fmt.Errorf("unable to read message file: %w", err)
+		}
+	}
+
+	if !utf8.Valid(messageBytes) {
+		return "", errors.New("message must be valid UTF-8")
+	}
+	if len(messageBytes) > bip322MaxMessageBytes {
+		return "", fmt.Errorf("message is too large: got %d bytes, max %d",
+			len(messageBytes), bip322MaxMessageBytes)
+	}
+
+	return string(messageBytes), nil
+}
+
 var withdrawalCommand = &cli.Command{
 	Name:    "withdraw",
 	Aliases: []string{"w"},
@@ -139,12 +316,12 @@ var withdrawalCommand = &cli.Command{
 	`,
 	Flags: []cli.Flag{
 		&cli.StringSliceFlag{
-			Name: "utxo",
+			Name: utxoFlagName,
 			Usage: "specify utxos as outpoints(tx:idx) which will" +
 				"be withdrawn.",
 		},
 		&cli.BoolFlag{
-			Name:  "all",
+			Name:  allFlagName,
 			Usage: "withdraws all static address deposits.",
 		},
 		&cli.StringFlag{
@@ -182,8 +359,8 @@ func withdraw(ctx context.Context, cmd *cli.Command) error {
 	defer cleanup()
 
 	var (
-		isAllSelected  = cmd.IsSet("all")
-		isUtxoSelected = cmd.IsSet("utxo")
+		isAllSelected  = cmd.IsSet(allFlagName)
+		isUtxoSelected = cmd.IsSet(utxoFlagName)
 		outpoints      []*lnrpc.OutPoint
 		destAddr       string
 	)
@@ -194,7 +371,7 @@ func withdraw(ctx context.Context, cmd *cli.Command) error {
 
 	case isAllSelected:
 	case isUtxoSelected:
-		utxos := cmd.StringSlice("utxo")
+		utxos := cmd.StringSlice(utxoFlagName)
 		outpoints, err = lnd.UtxosToOutpoints(utxos)
 		if err != nil {
 			return err
@@ -427,12 +604,12 @@ var staticAddressLoopInCommand = &cli.Command{
 	`,
 	Flags: []cli.Flag{
 		&cli.StringSliceFlag{
-			Name: "utxo",
+			Name: utxoFlagName,
 			Usage: "specify the utxos of deposits as " +
 				"outpoints(tx:idx) that should be looped in.",
 		},
 		&cli.BoolFlag{
-			Name:  "all",
+			Name:  allFlagName,
 			Usage: "loop in all static address deposits.",
 		},
 		&cli.DurationFlag{
@@ -511,8 +688,8 @@ func staticAddressLoopIn(ctx context.Context, cmd *cli.Command) error {
 	defer cleanup()
 
 	var (
-		isAllSelected              = cmd.IsSet("all")
-		isUtxoSelected             = cmd.IsSet("utxo")
+		isAllSelected              = cmd.IsSet(allFlagName)
+		isUtxoSelected             = cmd.IsSet(utxoFlagName)
 		autoSelectDepositsForQuote bool
 		label                      = cmd.String(labelFlag.Name)
 		hints                      []*swapserverrpc.RouteHint
@@ -568,7 +745,7 @@ func staticAddressLoopIn(ctx context.Context, cmd *cli.Command) error {
 		depositOutpoints = depositsToOutpoints(allDeposits)
 
 	case isUtxoSelected:
-		depositOutpoints = cmd.StringSlice("utxo")
+		depositOutpoints = cmd.StringSlice(utxoFlagName)
 
 	case selectedAmount > 0:
 		// If only an amount is selected, we will trigger coin

@@ -1,0 +1,104 @@
+{
+  "metadata": {
+    "args": [
+      "/home/user/bin/loop",
+      "static",
+      "bip322",
+      "pof",
+      "--network",
+      "regtest",
+      "--message",
+      "Loop BIP-322 selected reserve challenge",
+      "--utxo",
+      "90a4403d0b0dc7841255b6bdeab516cc2cea91120d2d27a77f8d4543013b4456:0"
+    ],
+    "env": {},
+    "version": "0.34.0-beta commit= commit_hash=",
+    "duration": 46592868,
+    "clock_start_unix": 1785403907
+  },
+  "events": [
+    {
+      "time_ms": 5,
+      "kind": "stderr",
+      "data": {
+        "lines": [
+          "WARNING: this proof reveals the static address timeout leaf, client key, CSV delay, and control-block internal key. It strongly fingerprints a Loop-style static address. Anyone who receives the proof can retain it and link the listed outpoints to the identity or context in the message.\n"
+        ]
+      }
+    },
+    {
+      "time_ms": 5,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/SignStaticAddressBip322",
+        "event": "request",
+        "message_type": "looprpc.StaticAddressBip322Request",
+        "payload": {
+          "message": "Loop BIP-322 selected reserve challenge",
+          "signature_type": "BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS",
+          "outpoints": [
+            "90a4403d0b0dc7841255b6bdeab516cc2cea91120d2d27a77f8d4543013b4456:0"
+          ],
+          "all": false
+        }
+      }
+    },
+    {
+      "time_ms": 45,
+      "kind": "grpc",
+      "data": {
+        "method": "/looprpc.SwapClient/SignStaticAddressBip322",
+        "event": "response",
+        "message_type": "looprpc.StaticAddressBip322Response",
+        "payload": {
+          "address": "bcrt1plhnu795j3mszsws9vkxd3aeg8ap45dweht5mc88j64hm6h2egefqynk3yh",
+          "signature_type": "BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS",
+          "signature": "pofcHNidP8BAGYCAAAAArbEMeGPWjVqW7H4M5NMIg+uuAvNWCJhlIVArEN9KzF4AAAAAABAOAAAVkQ7AUNFjX+nJy0NEpHqLMwWteq9tlUShMcNCz1ApJAAAAAAAEA4AAABAAAAAAAAAAABagAAAAABCSdMb29wIEJJUC0zMjIgc2VsZWN0ZWQgcmVzZXJ2ZSBjaGFsbGVuZ2UAAQCAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8iACDI+eV7RP9pSmJ7/Rzaj0Lk8vEkngy+ethBejuoBQur2wAAAAABAAAAAAAAAAAiUSD9588Wko7gKDoFZYzY9yg/Q1o12brpvBzy1W+9XVlGUgAAAAABASsAAAAAAAAAACJRIP3nzxaSjuAoOgVljNj3KD9DWjXZuum8HPLVb71dWUZSAQiLA0CYVVHSdx7OuLc4wzsmrtTTGgRmNM30QVzu6owjYIzaBxrtxKC8g90Mi8rvQnjCTtEjaMSxg155pp5RY1We3LQxJiA/q69NsFi/gol8bkXMtxY6JJRi6jqE8GvZpbL5dXbnd60CQDiyIcBGOPu+raKf2XMyV3vlM0xkPGNmK/AGxT0zc9G7BhJeigABASvgkwQAAAAAACJRIP3nzxaSjuAoOgVljNj3KD9DWjXZuum8HPLVb71dWUZSAQiLA0DRm4q0nDXBzbfZbAdlVEsRMM4R/qI+5bODs6gepc/pl+92iLS8niQyTksJt9g9abfCyHB0Go1QL7cnTBbTPO5pJiA/q69NsFi/gol8bkXMtxY6JJRi6jqE8GvZpbL5dXbnd60CQDiyIcBGOPu+raKf2XMyV3vlM0xkPGNmK/AGxT0zc9G7BhJeigAA",
+          "constrained": true,
+          "valid_at_time": 0,
+          "valid_at_age": 14400,
+          "deposits": [
+            {
+              "outpoint": "90a4403d0b0dc7841255b6bdeab516cc2cea91120d2d27a77f8d4543013b4456:0",
+              "amount_sat": "300000",
+              "confirmations": 3,
+              "state": "DEPOSITED"
+            }
+          ],
+          "total_amount_sat": "300000"
+        }
+      }
+    },
+    {
+      "time_ms": 46,
+      "kind": "stdout",
+      "data": {
+        "lines": [
+          "{\n",
+          "    \"address\": \"bcrt1plhnu795j3mszsws9vkxd3aeg8ap45dweht5mc88j64hm6h2egefqynk3yh\",\n",
+          "    \"constrained\": true,\n",
+          "    \"deposits\": [\n",
+          "        {\n",
+          "            \"amount_sat\": \"300000\",\n",
+          "            \"confirmations\": 3,\n",
+          "            \"outpoint\": \"90a4403d0b0dc7841255b6bdeab516cc2cea91120d2d27a77f8d4543013b4456:0\",\n",
+          "            \"state\": \"DEPOSITED\"\n",
+          "        }\n",
+          "    ],\n",
+          "    \"signature\": \"pofcHNidP8BAGYCAAAAArbEMeGPWjVqW7H4M5NMIg+uuAvNWCJhlIVArEN9KzF4AAAAAABAOAAAVkQ7AUNFjX+nJy0NEpHqLMwWteq9tlUShMcNCz1ApJAAAAAAAEA4AAABAAAAAAAAAAABagAAAAABCSdMb29wIEJJUC0zMjIgc2VsZWN0ZWQgcmVzZXJ2ZSBjaGFsbGVuZ2UAAQCAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8iACDI+eV7RP9pSmJ7/Rzaj0Lk8vEkngy+ethBejuoBQur2wAAAAABAAAAAAAAAAAiUSD9588Wko7gKDoFZYzY9yg/Q1o12brpvBzy1W+9XVlGUgAAAAABASsAAAAAAAAAACJRIP3nzxaSjuAoOgVljNj3KD9DWjXZuum8HPLVb71dWUZSAQiLA0CYVVHSdx7OuLc4wzsmrtTTGgRmNM30QVzu6owjYIzaBxrtxKC8g90Mi8rvQnjCTtEjaMSxg155pp5RY1We3LQxJiA/q69NsFi/gol8bkXMtxY6JJRi6jqE8GvZpbL5dXbnd60CQDiyIcBGOPu+raKf2XMyV3vlM0xkPGNmK/AGxT0zc9G7BhJeigABASvgkwQAAAAAACJRIP3nzxaSjuAoOgVljNj3KD9DWjXZuum8HPLVb71dWUZSAQiLA0DRm4q0nDXBzbfZbAdlVEsRMM4R/qI+5bODs6gepc/pl+92iLS8niQyTksJt9g9abfCyHB0Go1QL7cnTBbTPO5pJiA/q69NsFi/gol8bkXMtxY6JJRi6jqE8GvZpbL5dXbnd60CQDiyIcBGOPu+raKf2XMyV3vlM0xkPGNmK/AGxT0zc9G7BhJeigAA\",\n",
+          "    \"signature_type\": \"BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS\",\n",
+          "    \"total_amount_sat\": \"300000\",\n",
+          "    \"valid_at_age\": 14400,\n",
+          "    \"valid_at_time\": 0\n",
+          "}\n"
+        ]
+      }
+    },
+    {
+      "time_ms": 46,
+      "kind": "exit",
+      "data": {}
+    }
+  ]
+}

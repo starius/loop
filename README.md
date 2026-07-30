@@ -68,6 +68,7 @@ loop in <amt_in_satoshis>
 
 - [Loop FAQs](./docs/faqs.md)
 - [Loop CLI manual](./docs/loop.md)
+- [Static-address message signing and proof of funds](./docs/static-address-bip322.md)
 
 ## Development
 

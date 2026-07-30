@@ -111,3 +111,10 @@ then be swapped for an off-chain Lightning payment.
     HTLC transaction, which then follows a standard Loop-In flow. When the
     client gets the LN payment, they cooperate with the server to sweep the
     deposit directly to the server's wallet instead of publishing the HTLC tx.
+
+-   **Message signing and proof of funds:** The client can use its timeout key
+    to sign a message or prove ownership of funds held at the static address
+    without spending the deposits on-chain. These signatures reveal and
+    fingerprint the timeout path; see the
+    [static-address BIP-322 guide](static-address-bip322.md) for verification
+    and privacy requirements.

@@ -17,7 +17,6 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightninglabs/lndclient"
 	"github.com/lightninglabs/loop"
-	"github.com/lightninglabs/loop/loopd"
 	"github.com/lightninglabs/loop/looprpc"
 	"github.com/lightninglabs/loop/swap"
 	"github.com/lightningnetwork/lnd/clock"
@@ -31,7 +30,31 @@ import (
 	"gopkg.in/macaroon.v2"
 )
 
+const (
+	// defaultLoopNetwork mirrors loopd's default Bitcoin network.
+	defaultLoopNetwork = "mainnet"
+
+	// defaultLoopTLSCertFilename mirrors loopd's generated certificate name.
+	defaultLoopTLSCertFilename = "tls.cert"
+
+	// defaultLoopMacaroonFilename mirrors loopd's generated macaroon name.
+	defaultLoopMacaroonFilename = "loop.macaroon"
+)
+
 var (
+	// defaultLoopDir mirrors loopd's platform-specific application directory.
+	defaultLoopDir = btcutil.AppDataDir("loop", false)
+
+	// defaultLoopTLSCertPath is the default daemon certificate location.
+	defaultLoopTLSCertPath = filepath.Join(
+		defaultLoopDir, defaultLoopNetwork, defaultLoopTLSCertFilename,
+	)
+
+	// defaultLoopMacaroonPath is the default daemon macaroon location.
+	defaultLoopMacaroonPath = filepath.Join(
+		defaultLoopDir, defaultLoopNetwork, defaultLoopMacaroonFilename,
+	)
+
 	// Define route independent max routing fees. We have currently no way
 	// to get a reliable estimate of the routing fees. Best we can do is
 	// the minimum routing fees, which is not very indicative.
@@ -55,8 +78,8 @@ var (
 
 	loopDirFlag = &cli.StringFlag{
 		Name:        "loopdir",
-		Value:       loopd.LoopDirBase,
-		DefaultText: defaultPathText(loopd.LoopDirBase, os.UserHomeDir),
+		Value:       defaultLoopDir,
+		DefaultText: defaultPathText(defaultLoopDir, os.UserHomeDir),
 		Usage:       "path to loop's base directory",
 		Sources:     cli.EnvVars(envVarLoopDir),
 	}
@@ -64,25 +87,25 @@ var (
 		Name:    "network",
 		Aliases: []string{"n"},
 		Usage:   "the network loop is running on e.g. mainnet, testnet, etc.",
-		Value:   loopd.DefaultNetwork,
+		Value:   defaultLoopNetwork,
 		Sources: cli.EnvVars(envVarNetwork),
 	}
 
 	tlsCertFlag = &cli.StringFlag{
 		Name:  "tlscertpath",
 		Usage: "path to loop's TLS certificate",
-		Value: loopd.DefaultTLSCertPath,
+		Value: defaultLoopTLSCertPath,
 		DefaultText: defaultPathText(
-			loopd.DefaultTLSCertPath, os.UserHomeDir,
+			defaultLoopTLSCertPath, os.UserHomeDir,
 		),
 		Sources: cli.EnvVars(envVarTLSCertPath),
 	}
 	macaroonPathFlag = &cli.StringFlag{
 		Name:  "macaroonpath",
 		Usage: "path to macaroon file",
-		Value: loopd.DefaultMacaroonPath,
+		Value: defaultLoopMacaroonPath,
 		DefaultText: defaultPathText(
-			loopd.DefaultMacaroonPath, os.UserHomeDir,
+			defaultLoopMacaroonPath, os.UserHomeDir,
 		),
 		Sources: cli.EnvVars(envVarMacaroonPath),
 	}
@@ -427,18 +450,18 @@ func extractPathArgs(cmd *cli.Command) (string, string, error) {
 	// custom loop directory set. This allows us to set a custom loop
 	// directory and/or network, along with custom paths to the TLS cert and
 	// macaroon file.
-	if loopDir != loopd.LoopDirBase || networkStr != loopd.DefaultNetwork {
-		if tlsCertPathRaw == loopd.DefaultTLSCertPath {
+	if loopDir != defaultLoopDir || networkStr != defaultLoopNetwork {
+		if tlsCertPathRaw == defaultLoopTLSCertPath {
 			tlsCertPath = filepath.Join(
 				loopDir, networkStr,
-				loopd.DefaultTLSCertFilename,
+				defaultLoopTLSCertFilename,
 			)
 		}
 
-		if macPathRaw == loopd.DefaultMacaroonPath {
+		if macPathRaw == defaultLoopMacaroonPath {
 			macPath = filepath.Join(
 				loopDir, networkStr,
-				loopd.DefaultMacaroonFilename,
+				defaultLoopMacaroonFilename,
 			)
 		}
 	}
