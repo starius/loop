@@ -619,6 +619,7 @@ func (d *Daemon) initialize(withMacaroonService bool) error {
 	var (
 		staticAddressManager *address.Manager
 		depositManager       *deposit.Manager
+		staticProofManager   *staticAddressBip322Manager
 		withdrawalManager    *withdraw.Manager
 		openChannelManager   *openchannel.Manager
 		staticLoopInManager  *loopin.Manager
@@ -652,6 +653,22 @@ func (d *Daemon) initialize(withMacaroonService bool) error {
 		Signer:         d.lnd.Signer,
 	}
 	depositManager = deposit.NewManager(depoCfg)
+
+	// The proof manager is an I/O adapter over the address and deposit
+	// managers; it has no independent lifecycle.
+	staticProofManager, err = newStaticAddressBip322Manager(
+		staticAddressBip322Config{
+			addressManager: staticAddressManager,
+			depositManager: depositManager,
+			keyDeriver:     d.lnd.WalletKit,
+			signer:         d.lnd.Signer,
+			chainParams:    d.lnd.ChainParams,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("unable to create static address proof manager: "+
+			"%w", err)
+	}
 
 	// Static address deposit withdrawal manager setup.
 	withdrawalStore := withdraw.NewSqlStore(
@@ -800,6 +817,7 @@ func (d *Daemon) initialize(withMacaroonService bool) error {
 		instantOutManager:    instantOutManager,
 		staticAddressManager: staticAddressManager,
 		depositManager:       depositManager,
+		staticProofManager:   staticProofManager,
 		withdrawalManager:    withdrawalManager,
 		staticLoopInManager:  staticLoopInManager,
 		openChannelManager:   openChannelManager,

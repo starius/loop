@@ -97,16 +97,19 @@ type swapClientServer struct {
 	instantOutManager    *instantout.Manager
 	staticAddressManager *address.Manager
 	depositManager       staticAddressDepositManager
-	withdrawalManager    *withdraw.Manager
-	staticLoopInManager  *loopin.Manager
-	openChannelManager   *openchannel.Manager
-	assetClient          *assets.TapdClient
-	swaps                map[lntypes.Hash]loop.SwapInfo
-	subscribers          map[int]chan<- any
-	statusChan           chan loop.SwapInfo
-	nextSubscriberID     int
-	swapsLock            sync.Mutex
-	mainCtx              context.Context
+
+	// staticProofManager signs messages and static-address fund proofs.
+	staticProofManager  staticAddressProofManager
+	withdrawalManager   *withdraw.Manager
+	staticLoopInManager *loopin.Manager
+	openChannelManager  *openchannel.Manager
+	assetClient         *assets.TapdClient
+	swaps               map[lntypes.Hash]loop.SwapInfo
+	subscribers         map[int]chan<- any
+	statusChan          chan loop.SwapInfo
+	nextSubscriberID    int
+	swapsLock           sync.Mutex
+	mainCtx             context.Context
 
 	// stopDaemon is invoked to trigger a graceful shutdown of the daemon.
 	stopDaemon func()
