@@ -174,6 +174,13 @@ service SwapClient {
     rpc ListUnspentDeposits (ListUnspentDepositsRequest)
         returns (ListUnspentDepositsResponse);
 
+    /* loop: `static bip322`
+    SignStaticAddressBip322 signs a message with a static address or proves
+    ownership of funds held at that address using BIP-322.
+    */
+    rpc SignStaticAddressBip322 (StaticAddressBip322Request)
+        returns (StaticAddressBip322Response);
+
     /* loop:`static withdraw`
     WithdrawDeposits withdraws a selection or all deposits of a static address.
      */
@@ -1831,6 +1838,128 @@ message Utxo {
     The number of confirmations for the Utxo.
     */
     int64 confirmations = 4;
+}
+
+/*
+The supported BIP-322 signature encodings.
+*/
+enum Bip322SignatureType {
+    // No signature type was selected.
+    BIP322_SIGNATURE_TYPE_UNSPECIFIED = 0;
+
+    // Value 1 is reserved for BIP-322 simple ("smp"). A static address must
+    // satisfy its CSV timeout leaf, but smp fixes the to_sign transaction
+    // version at zero while OP_CHECKSEQUENCEVERIFY requires version two or
+    // later.
+    reserved 1;
+
+    // A full BIP-322 signature with a serialized to_sign transaction.
+    BIP322_SIGNATURE_TYPE_FULL = 2;
+
+    // A proof of funds that appends real UTXOs to the challenge input.
+    BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS = 3;
+}
+
+/*
+StaticAddressBip322Request selects a message-signing variant and optional
+deposit inputs.
+*/
+message StaticAddressBip322Request {
+    /*
+    The exact UTF-8 message to sign. Loop does not add a domain, nonce,
+    audience or expiry.
+    */
+    string message = 1;
+
+    /*
+    The BIP-322 signature variant. The static-address timeout path supports
+    FULL and PROOF_OF_FUNDS.
+    */
+    Bip322SignatureType signature_type = 2;
+
+    /*
+    The explicit static-address deposit outpoints to include in a proof of
+    funds. Mutually exclusive with all.
+    */
+    repeated string outpoints = 3;
+
+    /*
+    Include every confirmed static-address deposit that lnd currently reports
+    unspent. Mutually exclusive with outpoints.
+    */
+    bool all = 4;
+}
+
+/*
+Bip322ProvenDeposit describes one real UTXO committed by a proof.
+*/
+message Bip322ProvenDeposit {
+    /*
+    The signed deposit outpoint in BIP-69 order.
+    */
+    string outpoint = 1;
+
+    /*
+    The amount committed by the proof's witness UTXO.
+    */
+    int64 amount_sat = 2;
+
+    /*
+    Confirmations reported by lnd when the proof was constructed.
+    */
+    uint32 confirmations = 3;
+
+    /*
+    Loop's deposit FSM state when the proof was constructed. This is response
+    metadata, not part of the cryptographic proof.
+    */
+    DepositState state = 4;
+}
+
+/*
+StaticAddressBip322Response contains the generic signature and snapshot
+metadata needed to audit it.
+*/
+message StaticAddressBip322Response {
+    /*
+    The static address against which the signature verifies.
+    */
+    string address = 1;
+
+    /*
+    The generated signature variant.
+    */
+    Bip322SignatureType signature_type = 2;
+
+    /*
+    The BIP-322 signature, including its ful or pof prefix.
+    */
+    string signature = 3;
+
+    /*
+    Whether the signature has time or age constraints.
+    */
+    bool constrained = 4;
+
+    /*
+    The absolute lock time required by the signature.
+    */
+    uint32 valid_at_time = 5;
+
+    /*
+    The relative age required by the signature.
+    */
+    uint32 valid_at_age = 6;
+
+    /*
+    Real deposit inputs included in a proof of funds, in signed input order.
+    */
+    repeated Bip322ProvenDeposit deposits = 7;
+
+    /*
+    The total value of the real deposit inputs.
+    */
+    int64 total_amount_sat = 8;
 }
 
 message WithdrawDepositsRequest {

@@ -901,6 +901,40 @@
         ]
       }
     },
+    "/v1/staticaddr/bip322": {
+      "post": {
+        "summary": "loop: `static bip322`\nSignStaticAddressBip322 signs a message with a static address or proves\nownership of funds held at that address using BIP-322.",
+        "operationId": "SwapClient_SignStaticAddressBip322",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/looprpcStaticAddressBip322Response"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "StaticAddressBip322Request selects a message-signing variant and optional\ndeposit inputs.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/looprpcStaticAddressBip322Request"
+            }
+          }
+        ],
+        "tags": [
+          "SwapClient"
+        ]
+      }
+    },
     "/v1/staticaddr/deposits": {
       "get": {
         "summary": "loop:`listdeposits`\nListStaticAddressDeposits returns a list of filtered static address\ndeposits.",
@@ -1551,6 +1585,40 @@
       ],
       "default": "AUTO_REASON_UNKNOWN",
       "description": " - AUTO_REASON_BUDGET_NOT_STARTED: Budget not started indicates that we do not recommend any swaps because\nthe start time for our budget has not arrived yet.\n - AUTO_REASON_SWEEP_FEES: Sweep fees indicates that the estimated fees to sweep swaps are too high\nright now.\n - AUTO_REASON_BUDGET_ELAPSED: Budget elapsed indicates that the autoloop budget for the period has been\nelapsed.\n - AUTO_REASON_IN_FLIGHT: In flight indicates that the limit on in-flight automatically dispatched\nswaps has already been reached.\n - AUTO_REASON_SWAP_FEE: Swap fee indicates that the server fee for a specific swap is too high.\n - AUTO_REASON_MINER_FEE: Miner fee indicates that the miner fee for a specific swap is to high.\n - AUTO_REASON_PREPAY: Prepay indicates that the prepay fee for a specific swap is too high.\n - AUTO_REASON_FAILURE_BACKOFF: Failure backoff indicates that a swap has recently failed for this target,\nand the backoff period has not yet passed.\n - AUTO_REASON_LOOP_OUT: Loop out indicates that a loop out swap is currently utilizing the channel,\nso it is not eligible.\n - AUTO_REASON_LOOP_IN: Loop In indicates that a loop in swap is currently in flight for the peer,\nso it is not eligible.\n - AUTO_REASON_LIQUIDITY_OK: Liquidity ok indicates that a target meets the liquidity balance expressed\nin its rule, so no swap is needed.\n - AUTO_REASON_BUDGET_INSUFFICIENT: Budget insufficient indicates that we cannot perform a swap because we do\nnot have enough pending budget available. This differs from budget elapsed,\nbecause we still have some budget available, but we have allocated it to\nother swaps.\n - AUTO_REASON_FEE_INSUFFICIENT: Fee insufficient indicates that the fee estimate for a swap is higher than\nthe portion of total swap amount that we allow fees to consume.\n - AUTO_REASON_STATIC_LOOP_IN_NO_CANDIDATE: No static loop-in candidate indicates that static loop-in autoloop was\nselected, but no full-deposit static candidate fit the rule.\n - AUTO_REASON_CUSTOM_CHANNEL_DATA: Custom channel data indicates that the target channel carries custom\nchannel data and is excluded from the standard autoloop planner."
+    },
+    "looprpcBip322ProvenDeposit": {
+      "type": "object",
+      "properties": {
+        "outpoint": {
+          "type": "string",
+          "description": "The signed deposit outpoint in BIP-69 order."
+        },
+        "amount_sat": {
+          "type": "string",
+          "format": "int64",
+          "description": "The amount committed by the proof's witness UTXO."
+        },
+        "confirmations": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Confirmations reported by lnd when the proof was constructed."
+        },
+        "state": {
+          "$ref": "#/definitions/looprpcDepositState",
+          "description": "Loop's deposit FSM state when the proof was constructed. This is response\nmetadata, not part of the cryptographic proof."
+        }
+      },
+      "description": "Bip322ProvenDeposit describes one real UTXO committed by a proof."
+    },
+    "looprpcBip322SignatureType": {
+      "type": "string",
+      "enum": [
+        "BIP322_SIGNATURE_TYPE_UNSPECIFIED",
+        "BIP322_SIGNATURE_TYPE_FULL",
+        "BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS"
+      ],
+      "default": "BIP322_SIGNATURE_TYPE_UNSPECIFIED",
+      "description": "The supported BIP-322 signature encodings.\n\n - BIP322_SIGNATURE_TYPE_UNSPECIFIED: No signature type was selected.\n - BIP322_SIGNATURE_TYPE_FULL: A full BIP-322 signature with a serialized to_sign transaction.\n - BIP322_SIGNATURE_TYPE_PROOF_OF_FUNDS: A proof of funds that appends real UTXOs to the challenge input."
     },
     "looprpcClientReservation": {
       "type": "object",
@@ -2640,6 +2708,76 @@
     },
     "looprpcSetLiquidityParamsResponse": {
       "type": "object"
+    },
+    "looprpcStaticAddressBip322Request": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The exact UTF-8 message to sign. Loop does not add a domain, nonce,\naudience or expiry."
+        },
+        "signature_type": {
+          "$ref": "#/definitions/looprpcBip322SignatureType",
+          "description": "The BIP-322 signature variant. The static-address timeout path supports\nFULL and PROOF_OF_FUNDS."
+        },
+        "outpoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The explicit static-address deposit outpoints to include in a proof of\nfunds. Mutually exclusive with all."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Include every confirmed static-address deposit that lnd currently reports\nunspent. Mutually exclusive with outpoints."
+        }
+      },
+      "description": "StaticAddressBip322Request selects a message-signing variant and optional\ndeposit inputs."
+    },
+    "looprpcStaticAddressBip322Response": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "The static address against which the signature verifies."
+        },
+        "signature_type": {
+          "$ref": "#/definitions/looprpcBip322SignatureType",
+          "description": "The generated signature variant."
+        },
+        "signature": {
+          "type": "string",
+          "description": "The BIP-322 signature, including its ful or pof prefix."
+        },
+        "constrained": {
+          "type": "boolean",
+          "description": "Whether the signature has time or age constraints."
+        },
+        "valid_at_time": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The absolute lock time required by the signature."
+        },
+        "valid_at_age": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The relative age required by the signature."
+        },
+        "deposits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/looprpcBip322ProvenDeposit"
+          },
+          "description": "Real deposit inputs included in a proof of funds, in signed input order."
+        },
+        "total_amount_sat": {
+          "type": "string",
+          "format": "int64",
+          "description": "The total value of the real deposit inputs."
+        }
+      },
+      "description": "StaticAddressBip322Response contains the generic signature and snapshot\nmetadata needed to audit it."
     },
     "looprpcStaticAddressLoopInRequest": {
       "type": "object",

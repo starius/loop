@@ -55,6 +55,9 @@ http:
       body: "*"
     - selector: looprpc.SwapClient.ListUnspentDeposits
       get: "/v1/staticaddr/deposits/unspent"
+    - selector: looprpc.SwapClient.SignStaticAddressBip322
+      post: "/v1/staticaddr/bip322"
+      body: "*"
     - selector: looprpc.SwapClient.WithdrawDeposits
       post: "/v1/staticaddr/withdraw"
       body: "*"

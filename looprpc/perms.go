@@ -94,6 +94,16 @@ var RequiredPermissions = map[string][]bakery.Op{
 		Entity: "loop",
 		Action: "in",
 	}},
+
+	// Signing proves the same client authority used to execute a static
+	// loop-in, so it intentionally reuses the existing execution grants.
+	"/looprpc.SwapClient/SignStaticAddressBip322": {{
+		Entity: "swap",
+		Action: "execute",
+	}, {
+		Entity: "loop",
+		Action: "in",
+	}},
 	"/looprpc.SwapClient/WithdrawDeposits": {{
 		Entity: "swap",
 		Action: "execute",
